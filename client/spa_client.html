@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SPA 单包授权演示</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1,
+        h2,
+        h3 {
+            color: #333;
+        }
+
+        .panel {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        input,
+        select {
+            padding: 10px;
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+            margin-right: 10px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        pre {
+            background-color: #f0f8ff;
+            border-left: 4px solid #2196F3;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .log-container {
+            height: 200px;
+            overflow-y: auto;
+            background-color: #282c34;
+            color: #abb2bf;
+            font-family: monospace;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .network-indicator {
+            height: 10px;
+            width: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .network-active {
+            background-color: #4CAF50;
+            box-shadow: 0 0 5px #4CAF50;
+        }
+
+        .network-inactive {
+            background-color: #f44336;
+            box-shadow: 0 0 5px #f44336;
+        }
+
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 20px 0;
+        }
+
+        .flow-step {
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            width: 22%;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .flow-step.active {
+            background-color: #4CAF50;
+            color: white;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            transform: translateY(-5px);
+        }
+
+        .flow-arrow {
+            font-size: 24px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>SPA 单包授权演示</h1>
+
+        <div class="panel">
+            <h2>分层授权架构</h2>
+            <p>本演示展示了一个两阶段授权系统：</p>
+            <ol>
+                <li><strong>第一阶段：</strong>单包授权(SPA)敲门 - 决定是否允许建立连接</li>
+                <li><strong>第二阶段：</strong>JWT令牌验证 - 管理已建立连接的会话和权限</li>
+            </ol>
+        </div>
+
+        <div class="flow-diagram">
+            <div id="step-udp" class="flow-step">
+                1. UDP敲门<br><small>请求访问</small>
+            </div>
+            <div class="flow-arrow">➡️</div>
+            <div id="step-port" class="flow-step">
+                2. 端口开放<br><small>临时授权</small>
+            </div>
+            <div class="flow-arrow">➡️</div>
+            <div id="step-jwt" class="flow-step">
+                3. JWT认证<br><small>会话管理</small>
+            </div>
+            <div class="flow-arrow">➡️</div>
+            <div id="step-secure" class="flow-step">
+                4. 安全通信<br><small>访问资源</small>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>UDP敲门配置</h2>
+            <div class="form-group">
+                <label for="udp-ip">服务器IP地址:</label>
+                <input type="text" id="udp-ip" value="localhost">
+            </div>
+            <div class="form-group">
+                <label for="udp-port">UDP端口:</label>
+                <input type="number" id="udp-port" value="9000">
+            </div>
+            <div class="form-group">
+                <label for="client-key">客户端密钥:</label>
+                <input type="text" id="client-key" value="client_secret_key">
+            </div>
+            <button id="send-knock" onclick="sendKnockRequest()">发送敲门请求</button>
+        </div>
+
+        <div class="panel">
+            <h2>连接状态</h2>
+            <div style="margin-bottom: 10px;">
+                <div class="network-indicator network-inactive" id="udp-status"></div>
+                <span>UDP通道状态</span>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <div class="network-indicator network-inactive" id="tcp-status"></div>
+                <span>TCP通道状态</span>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <div class="network-indicator network-inactive" id="jwt-status"></div>
+                <span>JWT授权状态</span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>认证结果</h2>
+            <div class="form-group">
+                <label>TCP端口:</label>
+                <pre id="tcp-port">未分配</pre>
+            </div>
+            <div class="form-group">
+                <label>访问令牌:</label>
+                <pre id="access-token">未获取</pre>
+            </div>
+            <div class="form-group">
+                <label>有效期:</label>
+                <pre id="token-expiry">未获取</pre>
+            </div>
+            <button id="connect-btn" onclick="connectToTcpPort()" disabled>连接TCP端口</button>
+            <button id="fetch-data-btn" onclick="fetchSecureData()" disabled>获取安全数据</button>
+            <button id="reset-btn" onclick="resetConnection()" style="background-color: #f44336;">重置连接</button>
+        </div>
+
+        <div class="panel">
+            <h2>系统日志</h2>
+            <div class="log-container" id="system-log"></div>
+        </div>
+    </div>
+
+    <script>
+        // 全局变量
+        let tcpPort = null;
+        let accessToken = null;
+        let tokenExpiry = null;
+
+        // 添加日志
+        function addLog(message, type = 'info') {
+            const log = document.getElementById('system-log');
+            const now = new Date().toLocaleTimeString();
+            let color = '#abb2bf';
+
+            if (type === 'success') color = '#98c379';
+            if (type === 'error') color = '#e06c75';
+            if (type === 'warn') color = '#e5c07b';
+            if (type === 'system') color = '#61afef';
+
+            const logItem = document.createElement('div');
+            logItem.innerHTML = `<span style="color: #56b6c2">[${now}]</span> <span style="color: ${color}">${message}</span>`;
+            log.appendChild(logItem);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        // 高亮当前步骤
+        function highlightStep(stepId) {
+            const steps = ['step-udp', 'step-port', 'step-jwt', 'step-secure'];
+            steps.forEach(step => {
+                document.getElementById(step).className = 'flow-step';
+            });
+
+            if (stepId) {
+                document.getElementById(stepId).className = 'flow-step active';
+            }
+        }
+
+        // 设置网络指示器状态
+        function setNetworkStatus(id, active) {
+            const indicator = document.getElementById(id);
+            if (active) {
+                indicator.className = 'network-indicator network-active';
+            } else {
+                indicator.className = 'network-indicator network-inactive';
+            }
+        }
+
+        // 发送UDP敲门请求
+        function sendKnockRequest() {
+            highlightStep('step-udp');
+            addLog('准备发送UDP敲门请求...', 'system');
+
+            const ip = document.getElementById('udp-ip').value;
+            const port = document.getElementById('udp-port').value;
+            const clientKey = document.getElementById('client-key').value;
+
+            if (!ip || !port || !clientKey) {
+                addLog('请填写所有UDP敲门配置字段', 'error');
+                return;
+            }
+
+            addLog(`发送UDP敲门数据包到 ${ip}:${port}...`);
+
+            // 将UDP状态设置为活跃
+            setNetworkStatus('udp-status', true);
+            addLog('UDP通道已激活', 'success');
+
+            // 发送模拟UDP请求到服务器的SPA接口
+            fetch('/api/spa/knock', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    client_key: clientKey,
+                    client_ip: '模拟客户端IP',
+                    timestamp: Date.now()
+                })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('敲门请求被拒绝');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    addLog('收到服务器响应', 'success');
+                    addLog(`分配的TCP端口: ${data.port}`, 'success');
+
+                    // UDP通道现在可以关闭
+                    setTimeout(() => {
+                        setNetworkStatus('udp-status', false);
+                        addLog('UDP通道已关闭（敲门完成）', 'system');
+                    }, 2000); // 延迟2秒关闭，以便用户看到状态变化
+
+                    // 更新界面显示
+                    tcpPort = data.port;
+                    document.getElementById('tcp-port').textContent = tcpPort;
+                    highlightStep('step-port');
+
+                    // 启用TCP连接按钮
+                    document.getElementById('connect-btn').disabled = false;
+
+                    // 添加超时信息
+                    addLog(`端口授权有效期: ${data.expires_in}秒`, 'warn');
+                    addLog('请尽快连接到TCP端口', 'warn');
+                })
+                .catch(error => {
+                    addLog(`敲门失败: ${error.message}`, 'error');
+                    setNetworkStatus('udp-status', false);
+                });
+
+        }
+
+        // 连接到TCP端口
+        function connectToTcpPort() {
+            if (!tcpPort) {
+                addLog('没有可用的TCP端口', 'error');
+                return;
+            }
+
+            addLog(`连接到TCP端口 ${tcpPort}...`, 'system');
+            setNetworkStatus('tcp-status', true);
+
+            // 连接到TCP端口并请求JWT令牌
+            fetch(`/api/auth/connect?port=${tcpPort}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    client_key: document.getElementById('client-key').value
+                })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('TCP连接被拒绝');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    addLog('TCP连接成功', 'success');
+                    addLog('获取JWT令牌...', 'system');
+
+                    // 更新界面显示
+                    accessToken = data.token;
+                    tokenExpiry = new Date(data.expires_at * 1000).toLocaleString();
+
+                    document.getElementById('access-token').textContent = accessToken;
+                    document.getElementById('token-expiry').textContent = tokenExpiry;
+
+                    highlightStep('step-jwt');
+                    setNetworkStatus('jwt-status', true);
+
+                    // 启用获取数据按钮
+                    document.getElementById('fetch-data-btn').disabled = false;
+
+                    addLog('JWT令牌已获取，可以开始安全通信', 'success');
+                })
+                .catch(error => {
+                    addLog(`TCP连接或JWT获取失败: ${error.message}`, 'error');
+                    setNetworkStatus('tcp-status', false);
+                });
+        }
+
+        // 获取安全数据
+        function fetchSecureData() {
+            if (!accessToken) {
+                addLog('没有JWT令牌，无法获取数据', 'error');
+                return;
+            }
+
+            addLog('使用JWT令牌请求安全数据...', 'system');
+            highlightStep('step-secure');
+
+            fetch('/api/secure/data', {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('访问被拒绝');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    addLog('成功获取安全数据', 'success');
+                    addLog(`数据内容: ${JSON.stringify(data)}`, 'success');
+                })
+                .catch(error => {
+                    addLog(`获取数据失败: ${error.message}`, 'error');
+                });
+        }
+
+        // 重置连接
+        function resetConnection() {
+            // 重置所有状态
+            tcpPort = null;
+            accessToken = null;
+            tokenExpiry = null;
+
+            // 更新UI
+            document.getElementById('tcp-port').textContent = '未分配';
+            document.getElementById('access-token').textContent = '未获取';
+            document.getElementById('token-expiry').textContent = '未获取';
+
+            // 禁用按钮
+            document.getElementById('connect-btn').disabled = true;
+            document.getElementById('fetch-data-btn').disabled = true;
+
+            // 重置指示器
+            setNetworkStatus('udp-status', false);
+            setNetworkStatus('tcp-status', false);
+            setNetworkStatus('jwt-status', false);
+
+            // 重置流程高亮
+            highlightStep(null);
+
+            addLog('所有连接已重置', 'warn');
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function () {
+            addLog('SPA单包授权系统已初始化', 'system');
+            addLog('请配置UDP敲门参数，然后点击"发送敲门请求"', 'system');
+        });
+    </script>
+</body>
+
+</html>

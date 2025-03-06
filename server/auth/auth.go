@@ -2,43 +2,97 @@ package auth
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
 )
 
-var secretKey = []byte("your_secret_key")
+var (
+	defaultManager     *AuthManager
+	defaultManagerOnce sync.Once
+)
 
+// Claims JWT声明结构
 type Claims struct {
 	Username string `json:"username"`
 	jwt.StandardClaims
 }
 
-func GenerateToken(username string) (string, error) {
+// AuthManager 认证管理器
+type AuthManager struct {
+	secretKey []byte
+}
+
+// NewAuthManager 创建一个新的认证管理器
+func NewAuthManager(secretKey string) *AuthManager {
+	return &AuthManager{
+		secretKey: []byte(secretKey),
+	}
+}
+
+// DefaultAuthManager 获取默认的认证管理器实例（单例模式）
+func DefaultAuthManager() *AuthManager {
+	defaultManagerOnce.Do(func() {
+		defaultManager = NewAuthManager("your_secret_key")
+	})
+	return defaultManager
+}
+
+// GenerateToken 生成JWT令牌
+func (am *AuthManager) GenerateToken(username string) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
 		Username: username,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: expirationTime.Unix(),
+			IssuedAt:  time.Now().Unix(),
+			Subject:   "api_access",
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(secretKey)
+	return token.SignedString(am.secretKey)
 }
 
-func ValidateToken(tokenString string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return secretKey, nil
+// GenerateConnectionToken 生成用于连接的短期令牌
+func (am *AuthManager) GenerateConnectionToken(username string, connectionKey string) (string, error) {
+	expirationTime := time.Now().Add(5 * time.Minute)
+	claims := &Claims{
+		Username: username,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+			IssuedAt:  time.Now().Unix(),
+			Subject:   "connection",
+			Id:        connectionKey,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(am.secretKey)
+}
+
+// ValidateToken 验证JWT令牌
+func (am *AuthManager) ValidateToken(tokenString string) (*Claims, error) {
+	// 解析令牌
+	claims := &Claims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		// 确保算法匹配
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return am.secretKey, nil
 	})
 
+	// 处理错误
 	if err != nil {
 		return nil, err
 	}
 
-	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
-		return claims, nil
+	// 验证令牌有效性
+	if !token.Valid {
+		return nil, errors.New("invalid token")
 	}
 
-	return nil, errors.New("invalid token")
+	return claims, nil
 }

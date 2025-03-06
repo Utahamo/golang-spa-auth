@@ -1,32 +1,84 @@
 package main
 
 import (
-	"golang-spa-auth/server/handlers"
-	"golang-spa-auth/server/middleware"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
-	"github.com/gorilla/mux"
+	"golang-spa-auth/server/auth"
+	"golang-spa-auth/server/handlers"
+	"golang-spa-auth/server/middleware"
+	"golang-spa-auth/server/spa"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	r := mux.NewRouter()
+	// 初始化SPA服务器实例
+	spaConfig := spa.SpaConfig{
+		Secret:            "server_secret_key",
+		UDPPort:           9000,
+		TCPPortRangeStart: 10000,
+		TCPPortRangeEnd:   10100,
+		AllowedClients:    []string{"client_secret_key"},
+		PortValidity:      30 * time.Second,
+	}
 
-	// API 路由
-	r.HandleFunc("/api/login", handlers.LoginHandler).Methods("POST")
+	spaServer := spa.NewSpaServer(spaConfig)
+	log.Printf("SPA服务器已初始化，监听UDP端口: %d", spaConfig.UDPPort)
 
-	// 保护的API路由 - 使用中间件
-	protectedRoutes := r.PathPrefix("/api").Subrouter()
-	protectedRoutes.Use(middleware.AuthMiddleware)
-	protectedRoutes.HandleFunc("/data", handlers.GetDataHandler).Methods("GET")
+	// 创建请求处理器实例
+	handler := handlers.NewHandler(spaServer, auth.DefaultAuthManager())
 
-	// 为静态文件提供服务
-	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./client")))
+	// 创建Gin引擎
+	r := gin.Default()
 
-	http.Handle("/", r)
+	// CORS中间件
+	r.Use(middleware.CORSMiddleware())
+
+	// 注册API路由，必须在静态文件服务之前注册
+	api := r.Group("/api")
+	{
+		// SPA敲门处理
+		api.POST("/spa/knock", handler.KnockHandler)
+
+		// TCP连接和JWT授权
+		api.POST("/auth/connect", handler.ConnectHandler)
+
+		// 原有登录接口
+		api.POST("/login", handler.LoginHandler)
+		api.GET("/data", middleware.JWTAuthMiddleware(), handler.DataHandler)
+
+		// 安全数据路由
+		secure := api.Group("/secure")
+		secure.Use(middleware.JWTAuthMiddleware())
+		{
+			secure.GET("/data", handler.SecureDataHandler)
+		}
+	}
+
+	// 配置静态文件服务
+	r.Static("/js", "./client/js")
+	r.Static("/css", "./client/css")
+	r.StaticFile("/spa_client.html", "./client/spa_client.html")
+	r.StaticFile("/index.html", "./client/index.html")
+	r.StaticFile("/", "./client/index.html")
+
+	// 处理所有其他路由 - SPA应用的HTML5历史模式支持
+	r.NoRoute(func(c *gin.Context) {
+		// 检查是否是API请求
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API路径不存在"})
+			return
+		}
+
+		// 非API请求可能是客户端路由
+		c.File("./client/index.html")
+	})
 
 	log.Println("服务启动在 http://localhost:8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
 }
