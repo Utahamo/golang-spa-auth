@@ -34,7 +34,7 @@ func NewAuthManager(secretKey string) *AuthManager {
 // DefaultAuthManager 获取默认的认证管理器实例（单例模式）
 func DefaultAuthManager() *AuthManager {
 	defaultManagerOnce.Do(func() {
-		defaultManager = NewAuthManager("your_secret_key")
+		defaultManager = NewAuthManager("04nc9x0w3kv0ab5pc91c") // 这里最好换成随机字符串，保证安全性
 	})
 	return defaultManager
 }
