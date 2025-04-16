@@ -17,12 +17,12 @@ import (
 func main() {
 	// 初始化SPA服务器实例
 	spaConfig := spa.SpaConfig{
-		Secret:            "server_secret_key",
+		Secret:            "server_secret_key", // 用于验证敲门包的密钥
 		UDPPort:           9000,
-		TCPPortRangeStart: 10000,
+		TCPPortRangeStart: 10000, //开放的TCP端口范围, 用于分配给客户端(每个用户一个端口)
 		TCPPortRangeEnd:   10100,
-		AllowedClients:    []string{"client_secret_key"},
-		PortValidity:      30 * time.Second,
+		AllowedClients:    []string{"client_secret_key"}, 
+		PortValidity:      30 * time.Second, // 过期时间
 	}
 
 	spaServer := spa.NewSpaServer(spaConfig)
@@ -34,10 +34,10 @@ func main() {
 	// 创建Gin引擎
 	r := gin.Default()
 
-	// CORS中间件
+	// CORS中间件，api请求需要跨域
 	r.Use(middleware.CORSMiddleware())
 
-	// 注册API路由，必须在静态文件服务之前注册
+	// API路由如下
 	api := r.Group("/api")
 	{
 		// SPA敲门处理

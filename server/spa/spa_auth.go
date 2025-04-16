@@ -60,11 +60,11 @@ type SpaServer struct {
 
 // NewSpaServer 创建一个新的SPA服务器实例
 func NewSpaServer(config SpaConfig) *SpaServer {
-	// 设置默认值
+	// 设置过期时间，默认值为30秒
 	if config.PortValidity == 0 {
 		config.PortValidity = 30 * time.Second
 	}
-
+	// 减少开销所以使用了指针方式
 	server := &SpaServer{
 		config: config,
 	}
