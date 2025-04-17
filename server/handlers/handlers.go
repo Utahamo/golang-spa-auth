@@ -6,31 +6,62 @@ import (
 	"strconv"
 	"time"
 
-	"golang-spa-auth/server/auth"
-	"golang-spa-auth/server/spa"
+	"golang-spa-auth/server/database"
+	"golang-spa-auth/server/security"
 
 	"github.com/gin-gonic/gin"
 )
 
 // Handler 处理器结构体，包含依赖项
 type Handler struct {
-	SPAServer   *spa.SpaServer
-	AuthManager *auth.AuthManager
+	SPAServer   *security.SpaServer
+	AuthManager *security.AuthManager
 }
 
-// NewHandler 创建一个新的处理器实例
-func NewHandler(spaServer *spa.SpaServer, authManager *auth.AuthManager) *Handler {
+// NewHandler 创建一个新的处理器实例, 主要负责的是SPA和JWT的处理
+func NewHandler(spaServer *security.SpaServer, authManager *security.AuthManager) *Handler {
 	return &Handler{
 		SPAServer:   spaServer,
 		AuthManager: authManager,
 	}
 }
 
-// LoginHandler 处理登录请求
+// RegisterHandler 处理注册请求, 需要邮件地址, 用户名和密码, 最后调用2fa的二维码返回给用户
+func (h *Handler) RegisterHandler(c *gin.Context) {
+	var registerReq struct {
+		Email    string `json:"email" binding:"required,email"`
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
+	// 一般都这么写
+	if err := c.ShouldBindJSON(&registerReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的注册请求"})
+		return
+	}
+
+	// 生成2FA密钥
+
+	// 这里可以添加注册逻辑，例如保存用户信息到数据库
+	dbUser := database.User{
+		Email:    registerReq.Email,
+		Username: registerReq.Username,
+		Password: registerReq.Password,
+		TwoFA:    "", // 这里可以存储2FA密钥
+	}
+	db := database.Getdb()
+
+	// 这里假设注册成功，返回一个2FA二维码的URL
+	// 生成2FA二维码
+
+	c.JSON(http.StatusOK, gin.H{"message": "注册成功"})
+}
+
+// LoginHandler 处理登录请求, 登录过程需要2FA认证, 并且需要提供用户名和密码
 func (h *Handler) LoginHandler(c *gin.Context) {
 	var loginReq struct {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
+		TwoFA    string `json:"2fa" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&loginReq); err != nil {
@@ -39,7 +70,7 @@ func (h *Handler) LoginHandler(c *gin.Context) {
 	}
 
 	// 简单的用户验证
-	if loginReq.Username == "admin" && loginReq.Password == "password" {
+	if loginReq.Username == "admin" && loginReq.Password == "password" && loginReq.TwoFA == "123456" {
 		token, err := h.AuthManager.GenerateToken(loginReq.Username)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成令牌失败"})

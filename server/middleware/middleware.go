@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"golang-spa-auth/server/auth"
+	"golang-spa-auth/server/security"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +23,7 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 		token := authHeader[7:]
 
 		// 验证JWT令牌
-		authManager := auth.DefaultAuthManager()
+		authManager := security.DefaultAuthManager()
 		claims, err := authManager.ValidateToken(token)
 		if err != nil || claims == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的访问令牌"})
@@ -64,7 +64,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		authManager := auth.DefaultAuthManager()
+		authManager := security.DefaultAuthManager()
 		claims, err := authManager.ValidateToken(token)
 		if err != nil || claims == nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)

@@ -1,4 +1,5 @@
-package spa
+// 主要用于SPA包的生成和验证
+package security
 
 import (
 	"crypto/hmac"

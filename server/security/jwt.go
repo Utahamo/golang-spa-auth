@@ -1,4 +1,5 @@
-package auth
+// 主要用于处理JWT令牌的生成和验证
+package security
 
 import (
 	"errors"
@@ -19,7 +20,7 @@ type Claims struct {
 	jwt.StandardClaims
 }
 
-// AuthManager 认证管理器
+// AuthManager 认证管理器, 作用是生成和验证JWT令牌
 type AuthManager struct {
 	secretKey []byte
 }
