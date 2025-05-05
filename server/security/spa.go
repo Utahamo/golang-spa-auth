@@ -28,7 +28,22 @@ type SpaConfig struct {
 	PortValidity      time.Duration // 分配的端口有效期
 }
 
-// KnockRequest 表示一个敲门请求
+// SPA包的内容，应该尽量复杂，包含随机数Nonce, 时间戳, 身份标识, 环境上下文, 签名, 加密密文
+// 身份标识包含如设备MAC哈希、用户名哈希等, 使用SM3加密算法进行加密
+// 环境上下文	设备信息（如地理位置IP属地、设备类型）地理位置可通过IP反查API获取，加密存储
+// 签名	使用SM2算法进行签名
+// 加密密文	使用SM4算法进行加密，密钥为随机生成的16位字符串，使用AES-128-CBC加密模式
+// type KnockRequest struct {
+// 	Nonce        string `json:"nonce"`         // 随机字符串
+// 	Timestamp   int64  `json:"timestamp"`     // 时间戳
+// 	Username     string `json:"username"`      // 用户名或身份标识
+// 	DeviceInfo   string `json:"device_info"`   // 设备信息, 需要SM3哈希
+// 	Location     string `json:"location"`      // 地理位置, 暂时用不到
+// 	Signature    string `json:"signature"`     // 签名, SM2算法签名
+// 	Encrypted    string `json:"encrypted"`     // 加密密文
+// 	EncryptedKey string `json:"encrypted_key"` // 加密密钥
+// }
+
 type KnockRequest struct {
 	ClientKey string `json:"client_key"` // 客户端密钥
 	ClientIP  string `json:"client_ip"`  // 客户端IP
@@ -76,7 +91,7 @@ func NewSpaServer(config SpaConfig) *SpaServer {
 	return server
 }
 
-// ValidateKnockRequest 验证敲门请求
+// ValidateKnockRequest 验证敲门请求，这一部分需要进行大量填充
 func (s *SpaServer) ValidateKnockRequest(req KnockRequest) error {
 	// 验证时间戳不超过5分钟
 	if time.Now().Unix()-req.Timestamp > 300 {

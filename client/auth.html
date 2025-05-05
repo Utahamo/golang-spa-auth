@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户认证 - SPA授权系统</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        .auth-container {
+            max-width: 1000px;
+            margin: 30px auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .auth-tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+
+        .auth-tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+
+        .auth-tab.active {
+            border-bottom-color: #4CAF50;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        .auth-panel {
+            display: none;
+        }
+
+        .auth-panel.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            background: #45a049;
+        }
+
+        .message {
+            padding: 10px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .message.error {
+            background-color: #ffebee;
+            color: #c62828;
+            border-left: 4px solid #c62828;
+        }
+
+        .message.success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+            border-left: 4px solid #2e7d32;
+        }
+
+        .qr-container {
+            text-align: center;
+            margin-top: 20px;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .qr-container img {
+            max-width: 200px;
+            margin-bottom: 15px;
+        }
+
+        .secret-key {
+            font-family: monospace;
+            padding: 8px;
+            background: #f0f0f0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        .note {
+            color: #666;
+            font-size: 90%;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="auth-container">
+        <h1>SPA单包授权系统 - 用户认证</h1>
+        <div class="auth-tabs">
+            <div class="auth-tab active" data-tab="login">登录</div>
+            <div class="auth-tab" data-tab="register">注册</div>
+        </div>
+
+        <!-- 登录面板 -->
+        <div class="auth-panel active" id="login-panel">
+            <h2>用户登录</h2>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="login-email">电子邮箱</label>
+                    <input type="email" id="login-email" name="email" required placeholder="请输入您的电子邮箱">
+                </div>
+                <div class="form-group">
+                    <label for="login-username">用户名</label>
+                    <input type="text" id="login-username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">密码</label>
+                    <input type="password" id="login-password" name="password" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-2fa">双因素认证码 (2FA)</label>
+                    <input type="text" id="login-2fa" name="2fa" required placeholder="6位数验证码">
+                    <p class="note">请输入您的认证应用生成的6位验证码</p>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="btn-primary">登录</button>
+                </div>
+            </form>
+            <div id="login-message" class="message"></div>
+        </div>
+
+        <!-- 注册面板 -->
+        <div class="auth-panel" id="register-panel">
+            <h2>用户注册</h2>
+            <form id="register-form">
+                <div class="form-group">
+                    <label for="register-email">电子邮箱</label>
+                    <input type="email" id="register-email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="register-username">用户名</label>
+                    <input type="text" id="register-username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="register-password">密码</label>
+                    <input type="password" id="register-password" name="password" required>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="btn-primary">注册</button>
+                </div>
+            </form>
+            <div id="register-message" class="message"></div>
+
+            <!-- 2FA设置区域 -->
+            <div id="qr-setup" class="qr-container">
+                <h3>设置双因素认证 (2FA)</h3>
+                <p>请使用认证应用扫描以下二维码：</p>
+                <img id="qr-code" src="" alt="2FA 二维码">
+                <p>或手动输入以下密钥：</p>
+                <div class="secret-key" id="secret-key"></div>
+                <p class="note">推荐使用 Google Authenticator、Microsoft Authenticator 或 Authy 等认证应用。</p>
+                <p><strong>重要提示：</strong> 请妥善保存您的认证密钥，它是恢复2FA的唯一方式。</p>
+                <button id="continue-btn" class="btn-primary">我已设置好认证器，继续登录</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 切换登录/注册选项卡
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            tab.addEventListener('click', function () {
+                // 移除所有选项卡的活动状态
+                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
+
+                // 设置当前选项卡为活动状态
+                this.classList.add('active');
+                const tabName = this.getAttribute('data-tab');
+                document.getElementById(tabName + '-panel').classList.add('active');
+            });
+        });
+
+        // 处理注册表单提交
+        document.getElementById('register-form').addEventListener('submit', function (e) {
+            e.preventDefault();
+
+            const email = document.getElementById('register-email').value;
+            const username = document.getElementById('register-username').value;
+            const password = document.getElementById('register-password').value;
+            const messageElement = document.getElementById('register-message');
+
+            // 清除之前的消息
+            messageElement.textContent = '';
+            messageElement.className = 'message';
+
+            // 发送注册请求
+            fetch('/api/register', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    email: email,
+                    username: username,
+                    password: password
+                })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(response.status === 400 ? '请检查您的注册信息' : '注册失败，请稍后重试');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // 显示成功消息
+                    messageElement.textContent = '注册成功！正在设置2FA...';
+                    messageElement.className = 'message success';
+
+                    // 如果API返回了QR码，显示设置2FA的区域
+                    if (data.qrcode_url) {
+                        document.getElementById('qr-code').src = data.qrcode_url;
+                        document.getElementById('secret-key').textContent = data.secret_key || '';
+                        document.getElementById('qr-setup').style.display = 'block';
+
+                        // 滚动到QR码区域
+                        document.getElementById('qr-setup').scrollIntoView({ behavior: 'smooth' });
+                    }
+                })
+                .catch(error => {
+                    // 显示错误消息
+                    messageElement.textContent = error.message;
+                    messageElement.className = 'message error';
+                });
+        });
+
+        // 处理"继续登录"按钮
+        document.getElementById('continue-btn').addEventListener('click', function () {
+            // 自动切换到登录选项卡
+            document.querySelector('.auth-tab[data-tab="login"]').click();
+
+            // 自动填充用户名（如果之前有注册）
+            const username = document.getElementById('register-username').value;
+            if (username) {
+                document.getElementById('login-email').value = document.getElementById('register-email').value;
+                document.getElementById('login-username').value = username;
+                document.getElementById('login-password').focus();
+            }
+        });
+
+        // 处理登录表单提交
+        document.getElementById('login-form').addEventListener('submit', function (e) {
+            e.preventDefault();
+
+            const email = document.getElementById('login-email').value;
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            const twoFACode = document.getElementById('login-2fa').value;
+            const messageElement = document.getElementById('login-message');
+
+            // 清除之前的消息
+            messageElement.textContent = '';
+            messageElement.className = 'message';
+
+            // 验证2FA码格式
+            if (!/^\d{6}$/.test(twoFACode)) {
+                messageElement.textContent = '请输入有效的6位数验证码';
+                messageElement.className = 'message error';
+                return;
+            }
+
+            // 发送登录请求
+            fetch('/api/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    email: email,
+                    username: username,
+                    password: password,
+                    '2fa': twoFACode
+                })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        // 根据json中的error打印错误的信息
+                        return response.json().then(err => {
+                            throw new Error(err.error);
+                        });
+                        <!-- throw new Error(response.status === 401 ? '用户名、密码或验证码错误' : '登录失败，请稍后重试'); -->
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // 保存JWT令牌到本地存储
+                    if (data.token) {
+                        localStorage.setItem('token', data.token);
+                        localStorage.setItem('username', username);
+
+                        // 显示成功消息
+                        messageElement.textContent = '登录成功！正在跳转...';
+                        messageElement.className = 'message success';
+
+                        // 跳转到主页或仪表板
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 1500);
+                    } else {
+                        throw new Error('未接收到访问令牌');
+                    }
+                })
+                .catch(error => {
+                    // 显示错误消息
+                    messageElement.textContent = error.message;
+                    messageElement.className = 'message error';
+                });
+        });
+    </script>
+</body>
+
+</html>

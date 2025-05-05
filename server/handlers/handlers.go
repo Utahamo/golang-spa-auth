@@ -33,32 +33,37 @@ func (h *Handler) RegisterHandler(c *gin.Context) {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
 	}
-	// 一般都这么写
+	// 一般都这么写，主要是为了验证请求的合法性
 	if err := c.ShouldBindJSON(&registerReq); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的注册请求"})
 		return
 	}
 
-	// 生成2FA密钥
+	// 使用pquerna生成2FA的key
+	twoFAKey, _ := security.Generate2FAKey(registerReq.Email)
+	// 生成2FA的二维码
+	_, dataURL, _ := security.Generate2FASecret(twoFAKey)
 
 	// 这里可以添加注册逻辑，例如保存用户信息到数据库
 	dbUser := database.User{
 		Email:    registerReq.Email,
 		Username: registerReq.Username,
 		Password: registerReq.Password,
-		TwoFA:    "", // 这里可以存储2FA密钥
+		TwoFA:    twoFAKey.Secret(), // 这里可以存储2FA密钥
 	}
 	db := database.Getdb()
+	if err := db.Create(&dbUser).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "注册失败"})
+		return
+	}
 
-	// 这里假设注册成功，返回一个2FA二维码的URL
-	// 生成2FA二维码
-
-	c.JSON(http.StatusOK, gin.H{"message": "注册成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "注册成功", "qrcode_url": dataURL})
 }
 
-// LoginHandler 处理登录请求, 登录过程需要2FA认证, 并且需要提供用户名和密码
+// LoginHandler 处理登录请求, 登录过程需要输入邮箱，用户名和密码，并且需要经过2fa验证
 func (h *Handler) LoginHandler(c *gin.Context) {
 	var loginReq struct {
+		Email    string `json:"email" binding:"required,email"`
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
 		TwoFA    string `json:"2fa" binding:"required"`
@@ -69,18 +74,34 @@ func (h *Handler) LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// 简单的用户验证
-	if loginReq.Username == "admin" && loginReq.Password == "password" && loginReq.TwoFA == "123456" {
-		token, err := h.AuthManager.GenerateToken(loginReq.Username)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成令牌失败"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"token": token})
-	} else {
+	// 对比数据库中的用户信息
+	db := database.Getdb()
+	var dbUser database.User
+	if err := db.Where("email = ? AND username = ?", loginReq.Email, loginReq.Username).First(&dbUser).Error; err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
+		return
 	}
+	// 验证密码
+	if dbUser.Password != loginReq.Password {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
+		return
+	}
+	// 验证2FA，第一个参数是数据库中存储的2FA密钥，第二个参数是用户输入的2FA代码
+	valid, _ := security.Validate2FACode(dbUser.TwoFA, loginReq.TwoFA)
+	if !valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的2FA代码"})
+		return
+	}
+	fmt.Println(valid)
+	// 生成JWT令牌
+	token, err := h.AuthManager.GenerateToken(dbUser.Username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成令牌失败"})
+		return
+	}
+	// 返回JWT令牌
+	c.JSON(http.StatusOK, gin.H{"token": token})
+	
 }
 
 // DataHandler 处理常规JWT保护的数据请求
@@ -96,7 +117,7 @@ func (h *Handler) DataHandler(c *gin.Context) {
 
 // KnockHandler 处理SPA敲门请求
 func (h *Handler) KnockHandler(c *gin.Context) {
-	var req spa.KnockRequest
+	var req security.KnockRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求"})
 		return

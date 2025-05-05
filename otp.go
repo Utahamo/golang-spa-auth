@@ -9,7 +9,6 @@ import (
 	"github.com/pquerna/otp/totp"
 )
 
-
 func main() {
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer: "MyApp",
@@ -28,9 +27,12 @@ func main() {
 	// display the QR code to the user.
 	// display(buf.Bytes())
 
-
+	fmt.Println("Key URL:", key.Secret())
 	now := time.Now()
 	passcode, err := totp.GenerateCode(key.Secret(), now)
 	fmt.Println("Current OTP:", passcode)
 
+	fmt.Println("qrcodeURL:", key.URL())
+
+	fmt.Println(totp.Validate(key.Secret(), passcode))
 }

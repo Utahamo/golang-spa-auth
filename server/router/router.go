@@ -1,4 +1,4 @@
-package main
+package router
 
 import (
 	"net/http"
@@ -48,6 +48,8 @@ func SetRouter(handler *handlers.Handler) *gin.Engine {
 	r.StaticFile("/jwt.html", "./client/jwt.html")
 	r.StaticFile("/spa_client.html", "./client/spa_client.html") // 添加SPA客户端页面
 	r.StaticFile("/", "./client/index.html")
+
+	r.StaticFile("/auth.html", "./client/auth.html")
 
 	// 处理所有其他路由 - SPA应用的HTML5历史模式支持
 	r.NoRoute(func(c *gin.Context) {
