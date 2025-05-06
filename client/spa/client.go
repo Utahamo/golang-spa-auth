@@ -1,6 +1,7 @@
 package spa
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,6 +14,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"golang-spa-auth/server/gmsm/sm4" // 使用服务端的SM4实现
 )
 
 // KnockRequest 表示UDP敲门请求
@@ -37,6 +40,31 @@ type TokenResponse struct {
 	ExpiresAt int64  `json:"expires_at"` // 过期时间戳
 }
 
+// SM4静态密钥，与服务端保持一致
+var (
+	SM4Key = []byte("1234567890abcdef") // 16字节SM4密钥
+	SM4IV  = []byte("0000000000000000") // 16字节IV向量
+)
+
+// 初始化SM4加密环境
+func init() {
+	// 设置SM4的IV
+	err := sm4.SetIV(SM4IV)
+	if err != nil {
+		fmt.Printf("SM4初始化错误: %v\n", err)
+	}
+}
+
+// EncryptedSPARequest 表示加密后的敲门请求
+type EncryptedSPARequest struct {
+	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
+}
+
+// EncryptedSPAResponse 表示加密后的敲门响应
+type EncryptedSPAResponse struct {
+	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
+}
+
 // 添加生成随机字符串的辅助函数
 func generateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -50,16 +78,16 @@ func generateRandomString(length int) string {
 	return string(result)
 }
 
-// 修改发送UDP敲门请求函数
+// 更新SendKnockRequest函数，实现真正的UDP敲门
 func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockResponse, error) {
 	// 创建UDP连接
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", serverIP, udpPort))
-	if err != nil {
+	if (err != nil) {
 		return nil, fmt.Errorf("解析UDP地址失败: %v", err)
 	}
 
 	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
+	if (err != nil) {
 		return nil, fmt.Errorf("UDP连接失败: %v", err)
 	}
 	defer conn.Close()
@@ -70,33 +98,29 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 	// 创建时间戳
 	timestamp := time.Now().Unix()
 
-	// 生成随机Nonce
+	// 生成随机Nonce（防重放攻击）
 	nonce := generateRandomString(16)
-
-	// 生成签名
-	data := fmt.Sprintf("%s|%s|%d", clientKey, clientIP, timestamp)
-	h := hmac.New(sha256.New, []byte("server_secret_key"))
-	h.Write([]byte(data))
-	signature := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
 	// 构建敲门请求
 	req := KnockRequest{
-		Nonce:     nonce, // 添加随机生成的Nonce
+		Nonce:     nonce,
 		ClientKey: clientKey,
 		ClientIP:  clientIP,
 		Timestamp: timestamp,
-		Signature: signature,
+		// 先不生成签名，让服务端验证非签名模式
+		// Signature: signature,
 	}
 
 	// 序列化请求
 	reqData, err := json.Marshal(req)
-	if err != nil {
+	if (err != nil) {
 		return nil, fmt.Errorf("序列化请求失败: %v", err)
 	}
 
 	// 发送UDP数据包
+	fmt.Printf("发送UDP敲门数据包: %s\n", string(reqData))
 	_, err = conn.Write(reqData)
-	if err != nil {
+	if (err != nil) {
 		return nil, fmt.Errorf("发送UDP敲门数据包失败: %v", err)
 	}
 
@@ -106,15 +130,26 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 	// 接收响应
 	buffer := make([]byte, 1024)
 	n, _, err := conn.ReadFromUDP(buffer)
-	if err != nil {
+	if (err != nil) {
 		return nil, fmt.Errorf("接收UDP响应失败: %v", err)
 	}
 
 	// 解析响应
+	responseData := buffer[:n]
+	fmt.Printf("接收UDP响应数据: %s\n", string(responseData))
+
+	// 检查是否为错误响应
+	var errorResp map[string]interface{}
+	if err := json.Unmarshal(responseData, &errorResp); err == nil {
+		if errorMsg, ok := errorResp["error"]; ok {
+			return nil, fmt.Errorf("服务器返回错误: %v", errorMsg)
+		}
+	}
+
+	// 解析为标准响应
 	var response KnockResponse
-	err = json.Unmarshal(buffer[:n], &response)
-	if err != nil {
-		return nil, fmt.Errorf("解析响应失败: %v", err)
+	if err := json.Unmarshal(responseData, &response); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %v, 响应数据: %s", err, string(responseData))
 	}
 
 	return &response, nil
@@ -136,7 +171,7 @@ func ConnectToTcpPort(serverIP string, portStr string, clientKey string) (*Token
 
 	// 创建HTTP请求
 	req, err := http.NewRequest("POST", url, strings.NewReader(reqBody))
-	if err != nil {
+	if (err != nil) {
 		return nil, fmt.Errorf("创建HTTP请求失败: %v", err)
 	}
 
@@ -149,12 +184,12 @@ func ConnectToTcpPort(serverIP string, portStr string, clientKey string) (*Token
 
 	// 执行请求并获取响应
 	resp, err := client.Do(req)
-	if err != nil {
+	if (err != nil) {
 		return nil, fmt.Errorf("执行HTTP请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if (resp.StatusCode != http.StatusOK) {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("服务器返回错误状态码: %d, 响应: %s", resp.StatusCode, string(body))
 	}
@@ -178,7 +213,7 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	log.Printf("请求头: %v", req.Header)
 
 	resp, err := l.rt.RoundTrip(req)
-	if err != nil {
+	if (err != nil) {
 		log.Printf("传输层错误: %v", err)
 		return nil, err
 	}
@@ -192,11 +227,56 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // 获取出站IP地址
 func getOutboundIP() net.IP {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
+	if (err != nil) {
 		return net.IPv4(127, 0, 0, 1)
 	}
 	defer conn.Close()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP
+}
+
+// 加密SPA请求
+func encryptSPARequest(req KnockRequest) (string, error) {
+	// 序列化请求为JSON
+	data, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("序列化请求失败: %v", err)
+	}
+
+	// 使用SM4 ECB模式加密
+	encrypted, err := sm4.Sm4Ecb(SM4Key, data, true)
+	if err != nil {
+		return "", fmt.Errorf("SM4加密失败: %v", err)
+	}
+
+	// Base64编码加密后的数据
+	return base64.StdEncoding.EncodeToString(encrypted), nil
+}
+
+// 解密SPA响应
+func decryptSPAResponse(encryptedBase64 string) (*KnockResponse, error) {
+	// Base64解码
+	encrypted, err := base64.StdEncoding.DecodeString(encryptedBase64)
+	if err != nil {
+		return nil, fmt.Errorf("Base64解码失败: %v", err)
+	}
+
+	// 使用SM4 ECB模式解密
+	decrypted, err := sm4.Sm4Ecb(SM4Key, encrypted, false)
+	if err != nil {
+		return nil, fmt.Errorf("SM4解密失败: %v", err)
+	}
+
+	// 去除填充
+	decrypted = bytes.TrimRight(decrypted, string([]byte{0}))
+
+	// 解析JSON
+	var resp KnockResponse
+	err = json.Unmarshal(decrypted, &resp)
+	if err != nil {
+		return nil, fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	return &resp, nil
 }

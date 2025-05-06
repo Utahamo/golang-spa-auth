@@ -139,10 +139,61 @@ func (s *SpaServer) startUDPServer() {
 func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 	log.Printf("接收到来自 %s 的敲门请求", addr.String())
 
-	// 解析请求
-	var req KnockRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		log.Printf("解析请求失败: %v", err)
+	// 将接收到的数据解析为加密请求
+	var encReq EncryptedSPARequest
+	if err := json.Unmarshal(data, &encReq); err != nil {
+		log.Printf("解析加密请求失败: %v，尝试解析为未加密请求", err)
+
+		// 如果不是加密请求格式，尝试解析为普通请求（兼容旧版本）
+		var req KnockRequest
+		if err := json.Unmarshal(data, &req); err != nil {
+			log.Printf("解析请求失败: %v", err)
+			sendUDPErrorResponse(s.udpConn, addr, "解析请求失败: "+err.Error())
+			return
+		}
+
+		// 设置客户端IP (使用实际UDP请求的源IP地址)
+		req.ClientIP = addr.IP.String()
+
+		// 验证敲门请求
+		if err := s.ValidateKnockRequest(req); err != nil {
+			log.Printf("敲门请求验证失败: %v", err)
+			sendUDPErrorResponse(s.udpConn, addr, "敲门请求被拒绝: "+err.Error())
+			return
+		}
+
+		// 分配端口
+		resp, err := s.AllocatePort(req)
+		if err != nil {
+			log.Printf("无法分配端口: %v", err)
+			sendUDPErrorResponse(s.udpConn, addr, "无法分配端口: "+err.Error())
+			return
+		}
+
+		// 发送响应
+		respData, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("响应JSON编码失败: %v", err)
+			return
+		}
+
+		// 通过UDP发送响应
+		_, err = s.udpConn.WriteToUDP(respData, addr)
+		if err != nil {
+			log.Printf("发送UDP响应失败: %v", err)
+			return
+		}
+
+		log.Printf("已为 %s 分配端口 %d, 有效期 %d 秒",
+			addr.String(), resp.Port, resp.ExpiresIn)
+		return
+	}
+
+	// 解密请求
+	req, err := DecryptSPARequest(encReq.EncryptedData)
+	if err != nil {
+		log.Printf("解密请求失败: %v", err)
+		sendUDPErrorResponse(s.udpConn, addr, "解密请求失败: "+err.Error())
 		return
 	}
 
@@ -150,35 +201,48 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 	req.ClientIP = addr.IP.String()
 
 	// 验证敲门请求
-	if err := s.ValidateKnockRequest(req); err != nil {
+	if err := s.ValidateKnockRequest(*req); err != nil {
 		log.Printf("敲门请求验证失败: %v", err)
 		sendUDPErrorResponse(s.udpConn, addr, "敲门请求被拒绝: "+err.Error())
 		return
 	}
 
 	// 分配端口
-	resp, err := s.AllocatePort(req)
+	resp, err := s.AllocatePort(*req)
 	if err != nil {
 		log.Printf("无法分配端口: %v", err)
 		sendUDPErrorResponse(s.udpConn, addr, "无法分配端口: "+err.Error())
 		return
 	}
 
-	// 发送响应
-	respData, err := json.Marshal(resp)
+	// 加密响应
+	encryptedResp, err := EncryptSPAResponse(resp)
+	if err != nil {
+		log.Printf("加密响应失败: %v", err)
+		sendUDPErrorResponse(s.udpConn, addr, "加密响应失败: "+err.Error())
+		return
+	}
+
+	// 构造加密响应对象
+	encResp := EncryptedSPAResponse{
+		EncryptedData: encryptedResp,
+	}
+
+	// 序列化加密响应
+	respData, err := json.Marshal(encResp)
 	if err != nil {
 		log.Printf("响应JSON编码失败: %v", err)
 		return
 	}
 
-	// 通过UDP发送响应
+	// 通过UDP发送加密响应
 	_, err = s.udpConn.WriteToUDP(respData, addr)
 	if err != nil {
-		log.Printf("发送UDP响应失败: %v", err)
+		log.Printf("发送UDP加密响应失败: %v", err)
 		return
 	}
 
-	log.Printf("已为 %s 分配端口 %d, 有效期 %d 秒",
+	log.Printf("已为 %s 分配加密端口 %d, 有效期 %d 秒",
 		addr.String(), resp.Port, resp.ExpiresIn)
 }
 
@@ -261,7 +325,6 @@ func (s *SpaServer) ValidateKnockRequest(req KnockRequest) error {
 		log.Println("请求已过期")
 		return errors.New("请求已过期")
 	}
-
 
 	// 验证Nonce唯一性，防止重放攻击
 	if req.Nonce != "" {

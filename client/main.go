@@ -10,8 +10,9 @@ import (
 
 	"golang-spa-auth/client/spa"
 
-	"github.com/gin-gonic/gin"
 	"golang-spa-auth/client/logger"
+
+	"github.com/gin-gonic/gin"
 )
 
 // 全局配置
@@ -76,6 +77,8 @@ func main() {
 	{
 		// SPA敲门
 		api.POST("/spa/knock", handleKnock)
+		// 直接UDP敲门接口
+		api.POST("/spa/direct-knock", handleDirectKnock)
 
 		// TCP连接和令牌获取
 		api.POST("/auth/connect", handleConnect)
@@ -89,8 +92,8 @@ func main() {
 		api.GET("/secure/data", handleSecureData)
 	}
 	// 初始化日志系统
-    logger.Init()
-    logger.Info("SPA单包授权客户端启动")
+	logger.Init()
+	logger.Info("SPA单包授权客户端启动")
 
 	// 启动服务器
 	addr := fmt.Sprintf(":%d", config.HTTPPort)
@@ -144,54 +147,99 @@ func handleKnock(c *gin.Context) {
 
 // TCP连接请求处理
 func handleConnect(c *gin.Context) {
-    // 从查询参数获取端口
-    portStr := c.Query("port")
-    if portStr == "" {
-        logger.Error("缺少端口参数")
-        c.JSON(http.StatusBadRequest, gin.H{"error": "缺少端口参数"})
-        return
-    }
-    
-    var req struct {
-        ClientKey string `json:"client_key"`
-    }
-    
-    if err := c.ShouldBindJSON(&req); err != nil {
-        logger.Error("无效的请求参数: %v", err)
-        c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
-        return
-    }
-    
-    clientKey := req.ClientKey
-    if clientKey == "" {
-        clientKey = config.ClientKey // 使用默认客户端密钥
-        logger.Info("使用默认客户端密钥: %s", clientKey)
-    }
-    
-    logger.Info("尝试连接TCP端口: %s 服务器: %s", portStr, config.ServerIP)
-    
-    // 连接到TCP端口获取JWT令牌
-    response, err := spa.ConnectToTcpPort(config.ServerIP, portStr, clientKey)
-    if err != nil {
-        logger.Error("TCP连接失败: %v", err)
-        
-        
-        // 检查服务器状态
-        _, httpErr := http.Get(fmt.Sprintf("http://%s:8080/", config.ServerIP))
-        if httpErr != nil {
-            logger.Error("HTTP连接测试失败: %v", httpErr)
-        } else {
-            logger.Info("HTTP连接测试成功，服务器响应")
-        }
-        
-        c.JSON(http.StatusInternalServerError, gin.H{
-            "error": fmt.Sprintf("TCP连接失败: %v", err),
-        })
-        return
-    }
-    
-    logger.Info("TCP连接成功，获取令牌: %+v", response)
-    c.JSON(http.StatusOK, response)
+	// 从查询参数获取端口
+	portStr := c.Query("port")
+	if portStr == "" {
+		logger.Error("缺少端口参数")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少端口参数"})
+		return
+	}
+
+	var req struct {
+		ClientKey string `json:"client_key"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Error("无效的请求参数: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+
+	clientKey := req.ClientKey
+	if clientKey == "" {
+		clientKey = config.ClientKey // 使用默认客户端密钥
+		logger.Info("使用默认客户端密钥: %s", clientKey)
+	}
+
+	logger.Info("尝试连接TCP端口: %s 服务器: %s", portStr, config.ServerIP)
+
+	// 连接到TCP端口获取JWT令牌
+	response, err := spa.ConnectToTcpPort(config.ServerIP, portStr, clientKey)
+	if err != nil {
+		logger.Error("TCP连接失败: %v", err)
+
+		// 检查服务器状态
+		_, httpErr := http.Get(fmt.Sprintf("http://%s:8080/", config.ServerIP))
+		if httpErr != nil {
+			logger.Error("HTTP连接测试失败: %v", httpErr)
+		} else {
+			logger.Info("HTTP连接测试成功，服务器响应")
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("TCP连接失败: %v", err),
+		})
+		return
+	}
+
+	logger.Info("TCP连接成功，获取令牌: %+v", response)
+	c.JSON(http.StatusOK, response)
+}
+
+// 主文件添加直接UDP敲门处理函数
+func handleDirectKnock(c *gin.Context) {
+	var req struct {
+		ServerIP  string `json:"server_ip"`
+		UDPPort   int    `json:"udp_port"`
+		ClientKey string `json:"client_key"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Error("无效的请求参数: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+
+	// 使用请求中的值或默认配置
+	serverIP := config.ServerIP
+	udpPort := config.UDPPort
+	clientKey := config.ClientKey
+
+	if req.ServerIP != "" {
+		serverIP = req.ServerIP
+	}
+
+	if req.UDPPort != 0 {
+		udpPort = req.UDPPort
+	}
+
+	if req.ClientKey != "" {
+		clientKey = req.ClientKey
+	}
+
+	// 使用SPA客户端直接发送UDP敲门请求
+	logger.Info("发起直接UDP敲门请求到 %s:%d", serverIP, udpPort)
+	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey)
+	if err != nil {
+		logger.Error("UDP敲门失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("敲门失败: %v", err),
+		})
+		return
+	}
+
+	logger.Info("UDP敲门成功，分配端口: %d", response.Port)
+	c.JSON(http.StatusOK, response)
 }
 
 // 转发注册请求

@@ -296,16 +296,16 @@
             setNetworkStatus('udp-status', true);
             addLog('UDP通道已激活', 'success');
 
-            // 发送模拟UDP请求到服务器的SPA接口
-            fetch('/api/spa/knock', {
+            // 使用真正的UDP发送请求，而不是通过HTTP代理
+            fetch('/api/spa/direct-knock', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    client_key: clientKey,
-                    client_ip: '模拟客户端IP',
-                    timestamp: Date.now()
+                    server_ip: ip,
+                    udp_port: parseInt(port),
+                    client_key: clientKey
                 })
             })
                 .then(response => {
@@ -340,7 +340,6 @@
                     addLog(`敲门失败: ${error.message}`, 'error');
                     setNetworkStatus('udp-status', false);
                 });
-
         }
 
         // 连接到TCP端口
