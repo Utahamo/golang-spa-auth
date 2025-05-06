@@ -101,7 +101,6 @@ func (h *Handler) LoginHandler(c *gin.Context) {
 	}
 	// 返回JWT令牌
 	c.JSON(http.StatusOK, gin.H{"token": token})
-	
 }
 
 // DataHandler 处理常规JWT保护的数据请求
@@ -128,6 +127,15 @@ func (h *Handler) KnockHandler(c *gin.Context) {
 		req.ClientIP = c.ClientIP()
 	}
 
+	// 确保请求有时间戳
+	if req.Timestamp == 0 {
+		req.Timestamp = time.Now().Unix()
+	}
+
+	// 确保请求有Nonce, 这里只针对演示界面
+	if req.Nonce == "" {
+		req.Nonce = security.GenerateRandomString(16) // 注意：需要将此函数改为公开
+	}
 	// 验证敲门请求
 	if err := h.SPAServer.ValidateKnockRequest(req); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("敲门请求被拒绝: %v", err)})

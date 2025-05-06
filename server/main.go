@@ -25,6 +25,8 @@ func main() {
 	// 初始化SPA服务器
 	spaServer := security.NewSpaServer(spaConfig)
 	log.Printf("SPA服务器已初始化，监听UDP端口: %d", spaConfig.UDPPort)
+	log.Printf("配置的端口范围: %d-%d, 有效期: %v",
+		spaConfig.TCPPortRangeStart, spaConfig.TCPPortRangeEnd, spaConfig.PortValidity)
 
 	// 初始化2fa服务器
 	// twpfaServer := spa.New2faServer(spaConfig)

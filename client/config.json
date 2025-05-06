@@ -1,0 +1,7 @@
+{
+    "server_ip": "localhost",
+    "udp_port": 9000,
+    "client_key": "client_secret_key",
+    "server_secret": "server_secret_key",
+    "http_port": 3000
+}

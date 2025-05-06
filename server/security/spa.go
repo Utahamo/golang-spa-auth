@@ -5,8 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
 	"sync"
@@ -34,17 +36,18 @@ type SpaConfig struct {
 // 签名	使用SM2算法进行签名
 // 加密密文	使用SM4算法进行加密，密钥为随机生成的16位字符串，使用AES-128-CBC加密模式
 // type KnockRequest struct {
-// 	Nonce        string `json:"nonce"`         // 随机字符串
-// 	Timestamp   int64  `json:"timestamp"`     // 时间戳
-// 	Username     string `json:"username"`      // 用户名或身份标识
-// 	DeviceInfo   string `json:"device_info"`   // 设备信息, 需要SM3哈希
-// 	Location     string `json:"location"`      // 地理位置, 暂时用不到
-// 	Signature    string `json:"signature"`     // 签名, SM2算法签名
-// 	Encrypted    string `json:"encrypted"`     // 加密密文
-// 	EncryptedKey string `json:"encrypted_key"` // 加密密钥
+// 	Nonce      string `json:"nonce"`       // 随机字符串
+// 	Timestamp  int64  `json:"timestamp"`   // 时间戳
+// 	Username   string `json:"username"`    // 用户名或身份标识
+// 	DeviceInfo string `json:"device_info"` // 设备信息, 需要SM3哈希
+// 	// Location     string `json:"location"`      // 地理位置, 暂时用不到
+// 	Signature string `json:"signature"` // 签名, SM2算法签名
+// 	// Encrypted    string `json:"encrypted"`     // 加密密文，包括需要
+// 	// EncryptedKey string `json:"encrypted_key"` // 加密密钥
 // }
 
 type KnockRequest struct {
+	Nonce     string `json:"nonce"`      // 随机字符串
 	ClientKey string `json:"client_key"` // 客户端密钥
 	ClientIP  string `json:"client_ip"`  // 客户端IP
 	Timestamp int64  `json:"timestamp"`  // 请求时间戳
@@ -67,57 +70,215 @@ type PortAllocation struct {
 	ExpiresAt  time.Time // 过期时间
 }
 
-// SpaServer 实现单包授权服务
+// SpaServer 实现单包授权服务, 运行在服务端(或称零信任网关)
 type SpaServer struct {
 	config      SpaConfig
 	allocations sync.Map // 存储端口分配 key=端口, value=PortAllocation
+	usedNonces  sync.Map // 存储最近使用的Nonce key=Nonce, value=过期时间
 	mutex       sync.Mutex
+	udpConn     *net.UDPConn // 用于UDP监听
 }
 
-// NewSpaServer 创建一个新的SPA服务器实例
+// 修改NewSpaServer函数，启动UDP监听服务
 func NewSpaServer(config SpaConfig) *SpaServer {
-	// 设置过期时间，默认值为30秒
+	// 设置默认过期时间
 	if config.PortValidity == 0 {
 		config.PortValidity = 30 * time.Second
 	}
-	// 减少开销所以使用了指针方式
+
 	server := &SpaServer{
 		config: config,
 	}
 
 	// 启动过期端口清理任务
 	go server.cleanExpiredPorts()
+	go server.cleanExpiredNonces()
+
+	// 启动UDP监听服务
+	go server.startUDPServer()
 
 	return server
 }
 
-// ValidateKnockRequest 验证敲门请求，这一部分需要进行大量填充
-func (s *SpaServer) ValidateKnockRequest(req KnockRequest) error {
-	// 验证时间戳不超过5分钟
-	if time.Now().Unix()-req.Timestamp > 300 {
-		return errors.New("请求已过期")
+// 添加UDP服务器启动函数
+func (s *SpaServer) startUDPServer() {
+	// 解析UDP地址
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", s.config.UDPPort))
+	if err != nil {
+		log.Printf("解析UDP地址失败: %v", err)
+		return
 	}
 
-	// 验证客户端密钥是否在允许列表中
-	clientAllowed := false
-	for _, key := range s.config.AllowedClients {
-		if key == req.ClientKey {
-			clientAllowed = true
+	// 监听UDP端口
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		log.Printf("UDP监听失败: %v", err)
+		return
+	}
+
+	s.udpConn = conn
+	defer conn.Close()
+
+	log.Printf("UDP敲门服务已启动，监听端口: %d", s.config.UDPPort)
+
+	// 循环读取UDP数据包
+	buffer := make([]byte, 1024)
+	for {
+		n, addr, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			log.Printf("读取UDP数据包失败: %v", err)
+			continue
+		}
+
+		// 处理接收到的敲门请求
+		go s.handleKnockRequest(buffer[:n], addr)
+	}
+}
+
+// 添加处理UDP敲门请求的函数
+func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
+	log.Printf("接收到来自 %s 的敲门请求", addr.String())
+
+	// 解析请求
+	var req KnockRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		log.Printf("解析请求失败: %v", err)
+		return
+	}
+
+	// 设置客户端IP (使用实际UDP请求的源IP地址)
+	req.ClientIP = addr.IP.String()
+
+	// 验证敲门请求
+	if err := s.ValidateKnockRequest(req); err != nil {
+		log.Printf("敲门请求验证失败: %v", err)
+		sendUDPErrorResponse(s.udpConn, addr, "敲门请求被拒绝: "+err.Error())
+		return
+	}
+
+	// 分配端口
+	resp, err := s.AllocatePort(req)
+	if err != nil {
+		log.Printf("无法分配端口: %v", err)
+		sendUDPErrorResponse(s.udpConn, addr, "无法分配端口: "+err.Error())
+		return
+	}
+
+	// 发送响应
+	respData, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("响应JSON编码失败: %v", err)
+		return
+	}
+
+	// 通过UDP发送响应
+	_, err = s.udpConn.WriteToUDP(respData, addr)
+	if err != nil {
+		log.Printf("发送UDP响应失败: %v", err)
+		return
+	}
+
+	log.Printf("已为 %s 分配端口 %d, 有效期 %d 秒",
+		addr.String(), resp.Port, resp.ExpiresIn)
+}
+
+// 添加发送UDP错误响应的辅助函数
+func sendUDPErrorResponse(conn *net.UDPConn, addr *net.UDPAddr, errMsg string) {
+	resp := map[string]interface{}{
+		"error":     errMsg,
+		"timestamp": time.Now().Unix(),
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("错误响应JSON编码失败: %v", err)
+		return
+	}
+
+	_, err = conn.WriteToUDP(data, addr)
+	if err != nil {
+		log.Printf("发送UDP错误响应失败: %v", err)
+	}
+}
+
+// 下面是用于验证的相关函数
+// ===================================================================================
+
+// 检查并记录Nonce，如果Nonce已存在返回false，否则存储并返回true
+func (s *SpaServer) checkAndStoreNonce(nonce string, expiry time.Time) bool {
+	// 如果Nonce已存在，则返回false
+	if _, exists := s.usedNonces.Load(nonce); exists {
+		return false
+	}
+	s.usedNonces.Store(nonce, expiry)
+	return true
+}
+
+// 清理过期的Nonce
+func (s *SpaServer) cleanExpiredNonces() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now()
+		s.usedNonces.Range(func(key, value interface{}) bool {
+			expiry := value.(time.Time)
+			if now.After(expiry) {
+				s.usedNonces.Delete(key)
+			}
+			return true
+		})
+	}
+}
+
+// 验证敲门请求
+// ====================================================================================
+// ValidateKnockRequest 验证敲门请求，这一部分需要进行大量填充
+func (s *SpaServer) ValidateKnockRequest(req KnockRequest) error {
+	// 基本字段验证
+	if req.Nonce == "" {
+		log.Println("Nonce不能为空")
+		return errors.New("Nonce不能为空")
+	}
+
+	// 验证客户端密钥是否在白名单中
+	clientAuthorized := false
+	for _, allowedKey := range s.config.AllowedClients {
+		if req.ClientKey == allowedKey {
+			clientAuthorized = true
 			break
 		}
 	}
 
-	if !clientAllowed {
-		return errors.New("客户端未授权")
+	if !clientAuthorized {
+		log.Println("未授权的客户端密钥")
+		return errors.New("未授权的客户端密钥")
 	}
 
-	// 如果请求包含签名，验证签名
-	if req.Signature != "" {
-		expectedSignature := generateSignature(req, s.config.Secret)
-		if req.Signature != expectedSignature {
-			return errors.New("请求签名无效")
+	// 验证时间戳不超过5分钟
+	now := time.Now()
+	if now.Unix()-req.Timestamp > 300 {
+		log.Println("请求已过期")
+		return errors.New("请求已过期")
+	}
+
+
+	// 验证Nonce唯一性，防止重放攻击
+	if req.Nonce != "" {
+		nonceExpiry := time.Unix(req.Timestamp, 0).Add(5 * time.Minute)
+		if !s.checkAndStoreNonce(req.Nonce, nonceExpiry) {
+			log.Println("Nonce已被使用，可能是重放攻击")
+			return errors.New("Nonce已被使用，可能是重放攻击")
 		}
 	}
+
+	// // 如果请求包含签名，验证签名
+	// if req.Signature != "" {
+	// 	expectedSignature := generateSignature(req, s.config.Secret)
+	// 	if req.Signature != expectedSignature {
+	// 		return errors.New("请求签名无效")
+	// 	}
+	// }
 
 	return nil
 }
@@ -229,21 +390,21 @@ func isPortAvailable(port int) bool {
 }
 
 // 生成签名
-func generateSignature(req KnockRequest, secret string) string {
-	data := fmt.Sprintf("%s|%s|%d", req.ClientKey, req.ClientIP, req.Timestamp)
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(data))
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
-
-// 生成随机字符串
-func generateRandomString(length int) string {
+func GenerateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	result := make([]byte, length)
 	for i := range result {
 		result[i] = charset[rand.Intn(len(charset))]
 	}
 	return string(result)
+}
+
+// 修改generateSignature为公开
+func GenerateSignature(req KnockRequest, secret string) string {
+	data := fmt.Sprintf("%s|%s|%d", req.ClientKey, req.ClientIP, req.Timestamp)
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(data))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
 // GetConnectionCount 返回当前活跃连接数
