@@ -139,6 +139,88 @@
         .flow-arrow {
             font-size: 24px;
         }
+
+        /* 登录区域样式 */
+        .login-container {
+            margin-bottom: 20px;
+            padding: 20px;
+            background-color: #f0f8ff;
+            border-radius: 8px;
+            border: 1px solid #2196F3;
+        }
+
+        .login-form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .login-form .form-group {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .login-button {
+            background-color: #2196F3;
+            margin-top: 24px;
+            height: 40px;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 15px;
+            background-color: #e8f5e9;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .user-welcome {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+
+        .logout-button {
+            background-color: #f44336;
+            margin-top: 0;
+        }
+
+        .auth-message {
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 4px;
+        }
+
+        .auth-message.error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+
+        .auth-message.success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        /* 隐藏内容区域 */
+        .content-locked {
+            filter: blur(5px);
+            pointer-events: none;
+        }
+
+        .locked-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(33, 150, 243, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            color: white;
+            z-index: 100;
+        }
     </style>
 </head>
 
@@ -146,88 +228,130 @@
     <div class="container">
         <h1>SPA 单包授权演示</h1>
 
-        <div class="panel">
-            <h2>分层授权架构</h2>
-            <p>本演示展示了一个两阶段授权系统：</p>
-            <ol>
-                <li><strong>第一阶段：</strong>单包授权(SPA)敲门 - 决定是否允许建立连接</li>
-                <li><strong>第二阶段：</strong>JWT令牌验证 - 管理已建立连接的会话和权限</li>
-            </ol>
+        <!-- 登录区域 -->
+        <div id="login-section" class="login-container">
+            <h2>用户登录</h2>
+            <p>请登录账户以使用SPA单包授权系统</p>
+            <form id="login-form" class="login-form">
+                <div class="form-group">
+                    <label for="login-email">电子邮箱</label>
+                    <input type="email" id="login-email" required placeholder="请输入您的电子邮箱">
+                </div>
+                <div class="form-group">
+                    <label for="login-username">用户名</label>
+                    <input type="text" id="login-username" required placeholder="请输入您的用户名">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">密码</label>
+                    <input type="password" id="login-password" required placeholder="请输入您的密码">
+                </div>
+                <div class="form-group">
+                    <label for="login-2fa">双因素认证码 (2FA)</label>
+                    <input type="text" id="login-2fa" required placeholder="6位数验证码">
+                </div>
+                <button type="submit" class="login-button">登录</button>
+            </form>
+            <div id="login-message" class="auth-message"></div>
+            <p>还没有账户? <a href="/auth.html">点击注册</a></p>
         </div>
 
-        <div class="flow-diagram">
-            <div id="step-udp" class="flow-step">
-                1. UDP敲门<br><small>请求访问</small>
-            </div>
-            <div class="flow-arrow">➡️</div>
-            <div id="step-port" class="flow-step">
-                2. 端口开放<br><small>临时授权</small>
-            </div>
-            <div class="flow-arrow">➡️</div>
-            <div id="step-jwt" class="flow-step">
-                3. JWT认证<br><small>会话管理</small>
-            </div>
-            <div class="flow-arrow">➡️</div>
-            <div id="step-secure" class="flow-step">
-                4. 安全通信<br><small>访问资源</small>
-            </div>
+        <!-- 用户信息区域 -->
+        <div id="user-section" class="user-info" style="display: none;">
+            <div class="user-welcome">欢迎, <span id="username-display">用户</span>!</div>
+            <button id="logout-btn" class="logout-button">退出登录</button>
         </div>
 
-        <div class="panel">
-            <h2>UDP敲门配置</h2>
-            <div class="form-group">
-                <label for="udp-ip">服务器IP地址:</label>
-                <input type="text" id="udp-ip" value="localhost">
-            </div>
-            <div class="form-group">
-                <label for="udp-port">UDP端口:</label>
-                <input type="number" id="udp-port" value="9000">
-            </div>
-            <div class="form-group">
-                <label for="client-key">客户端密钥:</label>
-                <input type="text" id="client-key" value="client_secret_key">
-            </div>
-            <button id="send-knock" onclick="sendKnockRequest()">发送敲门请求</button>
+        <!-- 内容锁定提示 -->
+        <div id="locked-message" class="locked-overlay" style="display: none;">
+            <h3>请先登录</h3>
+            <p>您需要登录后才能使用SPA单包授权系统</p>
         </div>
 
-        <div class="panel">
-            <h2>连接状态</h2>
-            <div style="margin-bottom: 10px;">
-                <div class="network-indicator network-inactive" id="udp-status"></div>
-                <span>UDP通道状态</span>
+        <!-- 内容区域 -->
+        <div id="spa-content">
+            <div class="panel">
+                <h2>分层授权架构</h2>
+                <p>本演示展示了一个两阶段授权系统：</p>
+                <ol>
+                    <li><strong>第一阶段：</strong>单包授权(SPA)敲门 - 决定是否允许建立连接</li>
+                    <li><strong>第二阶段：</strong>JWT令牌验证 - 管理已建立连接的会话和权限</li>
+                </ol>
             </div>
-            <div style="margin-bottom: 10px;">
-                <div class="network-indicator network-inactive" id="tcp-status"></div>
-                <span>TCP通道状态</span>
-            </div>
-            <div style="margin-bottom: 10px;">
-                <div class="network-indicator network-inactive" id="jwt-status"></div>
-                <span>JWT授权状态</span>
-            </div>
-        </div>
 
-        <div class="panel">
-            <h2>认证结果</h2>
-            <div class="form-group">
-                <label>TCP端口:</label>
-                <pre id="tcp-port">未分配</pre>
+            <div class="flow-diagram">
+                <div id="step-udp" class="flow-step">
+                    1. UDP敲门<br><small>请求访问</small>
+                </div>
+                <div class="flow-arrow">➡️</div>
+                <div id="step-port" class="flow-step">
+                    2. 端口开放<br><small>临时授权</small>
+                </div>
+                <div class="flow-arrow">➡️</div>
+                <div id="step-jwt" class="flow-step">
+                    3. JWT认证<br><small>会话管理</small>
+                </div>
+                <div class="flow-arrow">➡️</div>
+                <div id="step-secure" class="flow-step">
+                    4. 安全通信<br><small>访问资源</small>
+                </div>
             </div>
-            <div class="form-group">
-                <label>访问令牌:</label>
-                <pre id="access-token">未获取</pre>
-            </div>
-            <div class="form-group">
-                <label>有效期:</label>
-                <pre id="token-expiry">未获取</pre>
-            </div>
-            <button id="connect-btn" onclick="connectToTcpPort()" disabled>连接TCP端口</button>
-            <button id="fetch-data-btn" onclick="fetchSecureData()" disabled>获取安全数据</button>
-            <button id="reset-btn" onclick="resetConnection()" style="background-color: #f44336;">重置连接</button>
-        </div>
 
-        <div class="panel">
-            <h2>系统日志</h2>
-            <div class="log-container" id="system-log"></div>
+            <div class="panel">
+                <h2>UDP敲门配置</h2>
+                <div class="form-group">
+                    <label for="udp-ip">服务器IP地址:</label>
+                    <input type="text" id="udp-ip" value="localhost">
+                </div>
+                <div class="form-group">
+                    <label for="udp-port">UDP端口:</label>
+                    <input type="number" id="udp-port" value="9000">
+                </div>
+                <div class="form-group">
+                    <label for="client-key">客户端密钥:</label>
+                    <input type="text" id="client-key" value="client_secret_key">
+                </div>
+                <button id="send-knock" onclick="sendKnockRequest()">发送敲门请求</button>
+            </div>
+
+            <div class="panel">
+                <h2>连接状态</h2>
+                <div style="margin-bottom: 10px;">
+                    <div class="network-indicator network-inactive" id="udp-status"></div>
+                    <span>UDP通道状态</span>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <div class="network-indicator network-inactive" id="tcp-status"></div>
+                    <span>TCP通道状态</span>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <div class="network-indicator network-inactive" id="jwt-status"></div>
+                    <span>JWT授权状态</span>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>认证结果</h2>
+                <div class="form-group">
+                    <label>TCP端口:</label>
+                    <pre id="tcp-port">未分配</pre>
+                </div>
+                <div class="form-group">
+                    <label>访问令牌:</label>
+                    <pre id="access-token">未获取</pre>
+                </div>
+                <div class="form-group">
+                    <label>有效期:</label>
+                    <pre id="token-expiry">未获取</pre>
+                </div>
+                <button id="connect-btn" onclick="connectToTcpPort()" disabled>连接TCP端口</button>
+                <button id="fetch-data-btn" onclick="fetchSecureData()" disabled>获取安全数据</button>
+                <button id="reset-btn" onclick="resetConnection()" style="background-color: #f44336;">重置连接</button>
+            </div>
+
+            <div class="panel">
+                <h2>系统日志</h2>
+                <div class="log-container" id="system-log"></div>
+            </div>
         </div>
     </div>
 
@@ -236,6 +360,7 @@
         let tcpPort = null;
         let accessToken = null;
         let tokenExpiry = null;
+        let isLoggedIn = false; // 用户登录状态
 
         // 添加日志
         function addLog(message, type = 'info') {
@@ -276,8 +401,155 @@
             }
         }
 
+        // 检查用户是否已登录
+        function checkLoginStatus() {
+            const token = localStorage.getItem('token');
+            const username = localStorage.getItem('username');
+
+            if (token && username) {
+                // 用户已登录
+                isLoggedIn = true;
+                showUserInfo(username);
+                unlockSpaContent();
+                addLog(`欢迎回来, ${username}!`, 'success');
+            } else {
+                // 用户未登录
+                isLoggedIn = false;
+                showLoginForm();
+                lockSpaContent();
+                addLog('请登录以使用SPA单包授权系统', 'warn');
+            }
+        }
+
+        // 显示用户信息
+        function showUserInfo(username) {
+            document.getElementById('login-section').style.display = 'none';
+            document.getElementById('user-section').style.display = 'flex';
+            document.getElementById('username-display').textContent = username;
+        }
+
+        // 显示登录表单
+        function showLoginForm() {
+            document.getElementById('login-section').style.display = 'block';
+            document.getElementById('user-section').style.display = 'none';
+        }
+
+        // 锁定SPA内容
+        function lockSpaContent() {
+            document.getElementById('spa-content').classList.add('content-locked');
+            document.getElementById('locked-message').style.display = 'block';
+        }
+
+        // 解锁SPA内容
+        function unlockSpaContent() {
+            document.getElementById('spa-content').classList.remove('content-locked');
+            document.getElementById('locked-message').style.display = 'none';
+        }
+
+        // 处理登录表单提交
+        function handleLogin(event) {
+            event.preventDefault();
+
+            const email = document.getElementById('login-email').value;
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            const twoFACode = document.getElementById('login-2fa').value;
+            const messageElement = document.getElementById('login-message');
+
+            // 验证输入
+            if (!email || !username || !password || !twoFACode) {
+                messageElement.textContent = '请填写所有登录字段';
+                messageElement.className = 'auth-message error';
+                return;
+            }
+
+            // 验证2FA格式
+            if (!/^\d{6}$/.test(twoFACode)) {
+                messageElement.textContent = '请输入有效的6位数验证码';
+                messageElement.className = 'auth-message error';
+                return;
+            }
+
+            // 清除之前的消息
+            messageElement.textContent = '正在登录...';
+            messageElement.className = 'auth-message';
+
+            // 发送登录请求
+            fetch('/api/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    email: email,
+                    username: username,
+                    password: password,
+                    '2fa': twoFACode
+                })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => {
+                            throw new Error(err.error || '登录失败');
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // 登录成功
+                    if (data.token) {
+                        localStorage.setItem('token', data.token);
+                        localStorage.setItem('username', username);
+
+                        messageElement.textContent = '登录成功!';
+                        messageElement.className = 'auth-message success';
+
+                        addLog('登录成功, 已获取访问令牌', 'success');
+
+                        // 更新UI
+                        setTimeout(() => {
+                            isLoggedIn = true;
+                            showUserInfo(username);
+                            unlockSpaContent();
+                        }, 1000);
+                    } else {
+                        throw new Error('未收到有效的访问令牌');
+                    }
+                })
+                .catch(error => {
+                    messageElement.textContent = error.message;
+                    messageElement.className = 'auth-message error';
+                    addLog(`登录失败: ${error.message}`, 'error');
+                });
+        }
+
+        // 处理登出
+        function handleLogout() {
+            // 清除存储的令牌和用户名
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+
+            // 重置状态
+            isLoggedIn = false;
+
+            // 更新UI
+            showLoginForm();
+            lockSpaContent();
+
+            // 重置连接状态
+            resetConnection();
+
+            addLog('您已成功登出', 'system');
+        }
+
         // 发送UDP敲门请求
         function sendKnockRequest() {
+            // 验证登录状态
+            if (!isLoggedIn) {
+                addLog('请先登录后再使用敲门服务', 'error');
+                return;
+            }
+
             highlightStep('step-udp');
             addLog('准备发送UDP敲门请求...', 'system');
 
@@ -296,12 +568,20 @@
             setNetworkStatus('udp-status', true);
             addLog('UDP通道已激活', 'success');
 
+            // 添加授权头
+            const token = localStorage.getItem('token');
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
             // 使用真正的UDP发送请求，而不是通过HTTP代理
             fetch('/api/spa/direct-knock', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: headers,
                 body: JSON.stringify({
                     server_ip: ip,
                     udp_port: parseInt(port),
@@ -344,6 +624,11 @@
 
         // 连接到TCP端口
         function connectToTcpPort() {
+            if (!isLoggedIn) {
+                addLog('请先登录后再使用敲门服务', 'error');
+                return;
+            }
+
             if (!tcpPort) {
                 addLog('没有可用的TCP端口', 'error');
                 return;
@@ -352,12 +637,20 @@
             addLog(`连接到TCP端口 ${tcpPort}...`, 'system');
             setNetworkStatus('tcp-status', true);
 
+            // 获取授权令牌
+            const token = localStorage.getItem('token');
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
             // 连接到TCP端口并请求JWT令牌
             fetch(`/api/auth/connect?port=${tcpPort}`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: headers,
                 body: JSON.stringify({
                     client_key: document.getElementById('client-key').value
                 })
@@ -395,6 +688,11 @@
 
         // 获取安全数据
         function fetchSecureData() {
+            if (!isLoggedIn) {
+                addLog('请先登录后再使用敲门服务', 'error');
+                return;
+            }
+
             if (!accessToken) {
                 addLog('没有JWT令牌，无法获取数据', 'error');
                 return;
@@ -452,6 +750,15 @@
 
         // 初始化
         document.addEventListener('DOMContentLoaded', function () {
+            // 检查用户登录状态
+            checkLoginStatus();
+
+            // 添加登录表单事件监听器
+            document.getElementById('login-form').addEventListener('submit', handleLogin);
+
+            // 添加登出按钮事件监听器
+            document.getElementById('logout-btn').addEventListener('click', handleLogout);
+
             addLog('SPA单包授权系统已初始化', 'system');
             addLog('请配置UDP敲门参数，然后点击"发送敲门请求"', 'system');
         });

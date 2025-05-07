@@ -39,7 +39,7 @@ func main() {
 	router := router.SetRouter(handler)
 
 	log.Println("服务启动在 http://localhost:8080")
-	if err := router.Run(":8080"); err != nil {
+	if err := router.Run("127.0.0.1:8080"); err != nil {
 		log.Fatal(err)
 	}
 }

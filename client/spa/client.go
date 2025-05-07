@@ -2,8 +2,7 @@ package spa
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
+
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -78,16 +77,16 @@ func generateRandomString(length int) string {
 	return string(result)
 }
 
-// 更新SendKnockRequest函数，实现真正的UDP敲门
+// 更新SendKnockRequest函数，实现真正的UDP敲门并使用SM4加密
 func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockResponse, error) {
 	// 创建UDP连接
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", serverIP, udpPort))
-	if (err != nil) {
+	if err != nil {
 		return nil, fmt.Errorf("解析UDP地址失败: %v", err)
 	}
 
 	conn, err := net.DialUDP("udp", nil, addr)
-	if (err != nil) {
+	if err != nil {
 		return nil, fmt.Errorf("UDP连接失败: %v", err)
 	}
 	defer conn.Close()
@@ -111,16 +110,28 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 		// Signature: signature,
 	}
 
-	// 序列化请求
-	reqData, err := json.Marshal(req)
-	if (err != nil) {
-		return nil, fmt.Errorf("序列化请求失败: %v", err)
+	// 使用SM4加密请求数据
+	encryptedData, err := encryptSPARequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("加密请求失败: %v", err)
 	}
 
+	// 构建加密请求对象
+	encReq := EncryptedSPARequest{
+		EncryptedData: encryptedData,
+	}
+
+	// 序列化加密请求
+	reqData, err := json.Marshal(encReq)
+	if err != nil {
+		return nil, fmt.Errorf("序列化加密请求失败: %v", err)
+	}
+
+	fmt.Printf("发送加密UDP敲门数据包，长度: %d 字节\n", len(reqData))
+	
 	// 发送UDP数据包
-	fmt.Printf("发送UDP敲门数据包: %s\n", string(reqData))
 	_, err = conn.Write(reqData)
-	if (err != nil) {
+	if err != nil {
 		return nil, fmt.Errorf("发送UDP敲门数据包失败: %v", err)
 	}
 
@@ -128,16 +139,15 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 	// 接收响应
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, 2048) // 增大缓冲区以容纳加密响应
 	n, _, err := conn.ReadFromUDP(buffer)
-	if (err != nil) {
+	if err != nil {
 		return nil, fmt.Errorf("接收UDP响应失败: %v", err)
 	}
 
 	// 解析响应
 	responseData := buffer[:n]
-	fmt.Printf("接收UDP响应数据: %s\n", string(responseData))
-
+	
 	// 检查是否为错误响应
 	var errorResp map[string]interface{}
 	if err := json.Unmarshal(responseData, &errorResp); err == nil {
@@ -146,13 +156,25 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 		}
 	}
 
-	// 解析为标准响应
-	var response KnockResponse
-	if err := json.Unmarshal(responseData, &response); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %v, 响应数据: %s", err, string(responseData))
+	// 尝试解析为加密响应
+	var encResp EncryptedSPAResponse
+	if err := json.Unmarshal(responseData, &encResp); err != nil {
+		// 如果不是加密响应，尝试解析为普通响应（兼容旧版本）
+		var response KnockResponse
+		if err := json.Unmarshal(responseData, &response); err != nil {
+			return nil, fmt.Errorf("解析响应失败: %v, 响应数据: %s", err, string(responseData))
+		}
+		return &response, nil
+	}
+	
+	// 解密响应
+	resp, err := decryptSPAResponse(encResp.EncryptedData)
+	if err != nil {
+		return nil, fmt.Errorf("解密响应失败: %v", err)
 	}
 
-	return &response, nil
+	fmt.Printf("成功解密响应，分配的端口: %d\n", resp.Port)
+	return resp, nil
 }
 
 // 连接到TCP端口获取令牌
@@ -171,7 +193,7 @@ func ConnectToTcpPort(serverIP string, portStr string, clientKey string) (*Token
 
 	// 创建HTTP请求
 	req, err := http.NewRequest("POST", url, strings.NewReader(reqBody))
-	if (err != nil) {
+	if err != nil {
 		return nil, fmt.Errorf("创建HTTP请求失败: %v", err)
 	}
 
@@ -184,12 +206,12 @@ func ConnectToTcpPort(serverIP string, portStr string, clientKey string) (*Token
 
 	// 执行请求并获取响应
 	resp, err := client.Do(req)
-	if (err != nil) {
+	if err != nil {
 		return nil, fmt.Errorf("执行HTTP请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if (resp.StatusCode != http.StatusOK) {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("服务器返回错误状态码: %d, 响应: %s", resp.StatusCode, string(body))
 	}
@@ -213,7 +235,7 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	log.Printf("请求头: %v", req.Header)
 
 	resp, err := l.rt.RoundTrip(req)
-	if (err != nil) {
+	if err != nil {
 		log.Printf("传输层错误: %v", err)
 		return nil, err
 	}
@@ -227,7 +249,7 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // 获取出站IP地址
 func getOutboundIP() net.IP {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if (err != nil) {
+	if err != nil {
 		return net.IPv4(127, 0, 0, 1)
 	}
 	defer conn.Close()

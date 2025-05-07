@@ -96,7 +96,7 @@ func main() {
 	logger.Info("SPA单包授权客户端启动")
 
 	// 启动服务器
-	addr := fmt.Sprintf(":%d", config.HTTPPort)
+	addr := fmt.Sprintf("127.0.0.1:%d", config.HTTPPort)
 	log.Printf("客户端服务启动在 http://localhost%s", addr)
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("启动服务器失败: %v", err)

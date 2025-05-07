@@ -138,6 +138,8 @@ func (s *SpaServer) startUDPServer() {
 // 添加处理UDP敲门请求的函数
 func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 	log.Printf("接收到来自 %s 的敲门请求", addr.String())
+	log.Printf("接收的原始数据包: %x", data)              // 打印原始数据包（十六进制）
+	log.Printf("接收的原始数据包(字符串): %s", string(data)) // 打印原始数据包（字符串形式）
 
 	// 将接收到的数据解析为加密请求
 	var encReq EncryptedSPARequest
@@ -151,6 +153,8 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 			sendUDPErrorResponse(s.udpConn, addr, "解析请求失败: "+err.Error())
 			return
 		}
+
+		log.Printf("成功解析未加密请求: %+v", req) // 打印解析后的未加密请求
 
 		// 设置客户端IP (使用实际UDP请求的源IP地址)
 		req.ClientIP = addr.IP.String()
@@ -177,6 +181,8 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 			return
 		}
 
+		log.Printf("发送未加密响应: %+v", resp)
+
 		// 通过UDP发送响应
 		_, err = s.udpConn.WriteToUDP(respData, addr)
 		if err != nil {
@@ -189,6 +195,8 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 		return
 	}
 
+	log.Printf("检测到加密请求, 加密数据: %s", encReq.EncryptedData)
+
 	// 解密请求
 	req, err := DecryptSPARequest(encReq.EncryptedData)
 	if err != nil {
@@ -196,6 +204,8 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 		sendUDPErrorResponse(s.udpConn, addr, "解密请求失败: "+err.Error())
 		return
 	}
+
+	log.Printf("成功解密请求: %+v", *req) // 打印解密后的请求内容
 
 	// 设置客户端IP (使用实际UDP请求的源IP地址)
 	req.ClientIP = addr.IP.String()
@@ -215,6 +225,8 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 		return
 	}
 
+	log.Printf("已分配端口，准备加密响应: %+v", resp)
+
 	// 加密响应
 	encryptedResp, err := EncryptSPAResponse(resp)
 	if err != nil {
@@ -228,12 +240,16 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 		EncryptedData: encryptedResp,
 	}
 
+	log.Printf("响应已加密: %s", encryptedResp)
+
 	// 序列化加密响应
 	respData, err := json.Marshal(encResp)
 	if err != nil {
 		log.Printf("响应JSON编码失败: %v", err)
 		return
 	}
+
+	log.Printf("发送加密响应数据包: %s", string(respData))
 
 	// 通过UDP发送加密响应
 	_, err = s.udpConn.WriteToUDP(respData, addr)
