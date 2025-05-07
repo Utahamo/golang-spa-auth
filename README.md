@@ -1,43 +1,81 @@
 # SPA 单包授权系统
 
-本项目实现了一个基于单包授权(SPA)和 JWT 的分层安全认证系统，使用 Go 语言和 Gin 框架开发。它采用"先认证后连接"的安全模型，结合了网络层的 UDP 敲门机制和应用层的 JWT 令牌验证，为网络服务提供强大的安全保障。
+本项目实现了一个基于单包授权(SPA)和 JWT 的分层安全认证系统，使用 Go 语言和 Gin 框架开发。它采用"先认证后连接"的安全模型，结合了网络层的 UDP 敲门机制和应用层的 JWT 令牌验证，为网络服务提供强大的安全保障。该系统整合了国密算法（SM2/SM3/SM4）提高安全性。
 
 ## 项目架构
 
 ```
 golang-spa-auth/
-
-├── client/
-│   ├── css/
-│   │   └── style.css           # 样式文件
-│   ├── js/
-│   │   └── app.js              # 客户端JavaScript逻辑
-│   ├── index.html              # JWT认证演示页面
-│   └── spa_client.html         # SPA单包授权演示界面
-├── server/
-│   ├── auth/
-│   │   └── auth.go             # JWT令牌生成和验证
-│   ├── handlers/
-│   │   └── handlers.go         # HTTP请求处理函数
-│   ├── middleware/
-│   │   └── middleware.go       # JWT验证中间件
-│   ├── spa/
-│   │   └── spa_auth.go         # SPA单包授权核心实现
-│   └── main.go                 # 服务器入口程序
-├── udp.py                      # UDP敲门Python客户端
-├── go.mod                      # Go模块文件
-├── go.sum                      # Go依赖版本
-└── README.md                   # 项目文档
+├── client/                     # 客户端实现
+│   ├── api/                    # 客户端API实现
+│   │   └── proxy.go            # 代理服务实现
+│   ├── css/                    # 样式文件
+│   │   └── style.css
+│   ├── js/                     # 客户端JavaScript
+│   │   └── app.js
+│   ├── keys/                   # 客户端密钥存储
+│   │   └── sm2private.pem      # SM2私钥
+│   ├── logger/                 # 日志记录模块
+│   │   └── log.go
+│   ├── logs/                   # 日志文件
+│   ├── spa/                    # SPA单包授权客户端
+│   │   └── client.go           # 客户端核心实现
+│   ├── auth.html               # 认证页面
+│   ├── config.json             # 客户端配置
+│   ├── index.html              # 主页
+│   ├── jwt.html                # JWT演示页面
+│   └── main.go                 # 客户端入口程序
+├── server/                     # 服务器实现
+│   ├── database/               # 数据库操作
+│   │   └── database.go
+│   ├── gmsm/                   # 国密算法实现
+│   │   ├── sm2/                # SM2椭圆曲线公钥密码算法
+│   │   │   ├── cmd/            # SM2密钥生成工具
+│   │   │   │   └── genkeys.go
+│   │   │   ├── keyutils.go     # SM2密钥工具函数
+│   │   │   └── sm2.go          # SM2核心实现
+│   │   ├── sm3/                # SM3密码杂凑算法
+│   │   │   └── sm3.go
+│   │   └── sm4/                # SM4分组密码算法
+│   │       └── sm4.go
+│   ├── handlers/               # 请求处理器
+│   │   └── handlers.go
+│   ├── keys/                   # 服务器密钥存储
+│   │   └── sm2public.pem       # SM2公钥
+│   ├── middleware/             # 中间件
+│   │   └── middleware.go
+│   ├── router/                 # 路由配置
+│   │   └── router.go
+│   ├── security/               # 安全模块
+│   │   ├── crypto.go           # 加密相关函数
+│   │   ├── jwt.go              # JWT实现
+│   │   ├── spa.go              # SPA单包授权实现
+│   │   └── twofa.go            # 两因素认证
+│   └── main.go                 # 服务器入口程序
+├── logs/                       # 系统日志
+├── go.mod                      # Go模块文件
+├── go.sum                      # Go依赖版本
+├── otp.go                      # OTP实现
+├── udp.py                      # UDP测试脚本
+└── README.md                   # 项目文档
 ```
 
 ## 系统特点
 
-- **双层安全架构**：结合 UDP 敲门授权和 JWT 令牌验证
+- **多层安全架构**：结合 UDP 敲门授权、SM2 密钥验证和 JWT 令牌认证
+- **国密算法支持**：采用 SM2/SM3/SM4 国密算法保障数据安全
+- **加密通信**：请求和响应均采用加密传输
+- **数字签名验证**：使用 SM2 数字签名验证请求真实性
 - **动态端口分配**：每次认证成功分配一个临时随机端口
 - **IP 限制**：分配的端口仅对特定 IP 地址开放
 - **时效性控制**：端口授权有严格的时间限制
-- **签名验证**：使用 HMAC-SHA256 对敲门请求进行签名验证
-- **可视化演示**：直观展示完整的授权流程
+- **可视化界面**：直观展示完整的授权流程
+
+## 加密方案
+
+- **SM2 椭圆曲线公钥密码算法**：用于数字签名和密钥交换
+- **SM3 密码杂凑算法**：用于数据完整性校验
+- **SM4 分组密码算法**：用于数据加密和解密
 
 ## 运行环境要求
 
@@ -47,44 +85,97 @@ golang-spa-auth/
 
 ## 快速开始
 
+### 生成 SM2 密钥对
+
+```bash
+cd server/gmsm/sm2/cmd
+go run genkeys.go
+# 或使用编译后的可执行文件
+./genkeys
+```
+
+密钥对将生成在 `keys` 目录下：
+
+- 公钥：`sm2public.pem` (保留在服务器端 `server/keys` 目录)
+- 私钥：`sm2private.pem` (复制到客户端 `client/keys` 目录)
+
 ### 启动服务器
 
+```bash
+cd server
+go run main.go
 ```
-cd server
 
-go run main.go
+服务器将在 `http://localhost:8080` 启动，并监听 UDP 端口 9000 用于 SPA 敲门。
+
+### 启动客户端
+
+```bash
+cd client
+go run main.go
 ```
 
-服务器将在`http://localhost:8080`启动，并监听 UDP 端口 9000 用于 SPA 敲门。
+客户端将启动并尝试通过 SPA 敲门获取访问权限。
 
-### 访问客户端
-
-1. 打开 JWT 认证演示:
-   http://localhost:8080/index.html
-2. 打开 SPA 单包授权演示:
-   http://localhost:8080/spa_client.html
-
-## 使用说明
+## 使用流程
 
 ### SPA 单包授权流程
 
-1. **第一阶段：UDP 敲门**
+1. **准备阶段**
 
-   - 配置服务器 IP、UDP 端口(9000)和客户端密钥
-   - 发送敲门请求，获取临时 TCP 端口分配
+   - 生成 SM2 密钥对，服务器保存公钥，客户端保存私钥
+   - 配置服务器和客户端参数
 
-2. **第二阶段：JWT 认证**
+2. **第一阶段：UDP 敲门**
 
-   - 连接到分配的临时端口
+   - 客户端构建敲门请求，包含随机 Nonce 和时间戳
+   - 对请求进行 SM4 加密
+   - 使用 SM2 私钥对加密数据进行签名
+   - 将加密数据、签名和公钥发送到服务器
+
+3. **中间阶段：验证**
+
+   - 服务器接收请求，解析公钥和签名
+   - 使用公钥验证 SM2 签名
+   - 使用 SM4 解密请求内容
+   - 验证请求中的时间戳和 Nonce
+
+4. **第二阶段：端口分配**
+
+   - 服务器分配临时 TCP 端口
+   - 加密响应数据并返回给客户端
+   - 客户端解密响应获取分配的端口
+
+5. **第三阶段：JWT 认证**
+   - 客户端连接到分配的临时端口
    - 获取 JWT 访问令牌
    - 使用令牌访问受保护资源
 
 ### 真实环境测试
 
-使用 Python 脚本发送真实 UDP 敲门包:
+使用提供的客户端程序进行完整测试：
 
-```
-python udp.py
+```bash
+cd client
+go run main.go
 ```
 
-此脚本将发送包含客户端密钥、时间戳和 HMAC 签名的 UDP 数据包，并接收服务器返回的端口分配信息。
+或使用 Python 脚本发送简单的 UDP 敲门包（不包含 SM2 签名）：
+
+```bash
+python udp.py
+```
+
+## 安全注意事项
+
+- 在生产环境中，应定期更换 SM2 密钥对
+- 密钥应通过安全通道分发给客户端
+- 建议为不同的客户端创建不同的密钥对
+- 可考虑将公钥存储在数据库而非文件系统，进一步提高安全性
+
+## 未来工作
+
+- [ ] 实现密钥自动轮换机制
+- [ ] 添加公钥证书管理系统
+- [ ] 集成 OAuth2.0 认证流程
+- [ ] 实现分布式部署支持

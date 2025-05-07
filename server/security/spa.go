@@ -6,18 +6,25 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
+	mrand "math/rand"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"golang-spa-auth/server/gmsm/sm2"
+	"golang-spa-auth/server/gmsm/sm3"
 )
 
 // 初始化随机种子
 func init() {
-	rand.Seed(time.Now().UnixNano())
+	mrand.Seed(time.Now().UnixNano())
 }
 
 // SpaConfig 存储SPA敲门服务的配置
@@ -28,6 +35,7 @@ type SpaConfig struct {
 	TCPPortRangeEnd   int           // TCP端口范围结束
 	AllowedClients    []string      // 允许的客户端密钥列表
 	PortValidity      time.Duration // 分配的端口有效期
+	PublicKeysDir     string        // 公钥目录路径
 }
 
 // SPA包的内容，应该尽量复杂，包含随机数Nonce, 时间戳, 身份标识, 环境上下文, 签名, 加密密文
@@ -54,6 +62,13 @@ type KnockRequest struct {
 	Signature string `json:"signature"`  // 请求签名（可选）
 }
 
+// EncryptedSPARequest 表示加密后的敲门请求
+type EncryptedSPARequest struct {
+	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
+	PublicKeyPEM  string `json:"public_key_pem"` // PEM格式的SM2公钥
+	Signature     []byte `json:"signature"`      // SM2签名
+}
+
 // KnockResponse 表示对敲门请求的响应
 type KnockResponse struct {
 	Port      int   `json:"port"`       // 分配的TCP端口
@@ -72,11 +87,12 @@ type PortAllocation struct {
 
 // SpaServer 实现单包授权服务, 运行在服务端(或称零信任网关)
 type SpaServer struct {
-	config      SpaConfig
-	allocations sync.Map // 存储端口分配 key=端口, value=PortAllocation
-	usedNonces  sync.Map // 存储最近使用的Nonce key=Nonce, value=过期时间
-	mutex       sync.Mutex
-	udpConn     *net.UDPConn // 用于UDP监听
+	config           SpaConfig
+	allocations      sync.Map // 存储端口分配 key=端口, value=PortAllocation
+	usedNonces       sync.Map // 存储最近使用的Nonce key=Nonce, value=过期时间
+	clientPublicKeys sync.Map // 存储客户端公钥 key=客户端ID, value=*sm2.PublicKey
+	mutex            sync.Mutex
+	udpConn          *net.UDPConn // 用于UDP监听
 }
 
 // 修改NewSpaServer函数，启动UDP监听服务
@@ -89,6 +105,9 @@ func NewSpaServer(config SpaConfig) *SpaServer {
 	server := &SpaServer{
 		config: config,
 	}
+
+	// 加载SM2公钥
+	server.loadPublicKeys()
 
 	// 启动过期端口清理任务
 	go server.cleanExpiredPorts()
@@ -196,6 +215,46 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 	}
 
 	log.Printf("检测到加密请求, 加密数据: %s", encReq.EncryptedData)
+
+	// 验证SM2签名
+	if encReq.Signature != nil && len(encReq.PublicKeyPEM) > 0 {
+		log.Println("检测到SM2签名，进行验证...")
+
+		// 从PEM格式字符串加载公钥
+		block, _ := pem.Decode([]byte(encReq.PublicKeyPEM))
+		if block == nil || block.Type != "SM2 PUBLIC KEY" {
+			log.Printf("无效的SM2公钥PEM格式")
+			sendUDPErrorResponse(s.udpConn, addr, "无效的SM2公钥PEM格式")
+			return
+		}
+
+		// 解析公钥
+		pub, err := sm2.ParseSM2PublicKey(block.Bytes)
+		if err != nil {
+			log.Printf("解析SM2公钥失败: %v", err)
+			sendUDPErrorResponse(s.udpConn, addr, "解析SM2公钥失败: "+err.Error())
+			return
+		}
+
+		// 使用SM3计算摘要
+		h := sm3.New()
+		h.Write([]byte(encReq.EncryptedData))
+		sum := h.Sum(nil)
+
+		// 构造完整消息（与客户端签名的消息相同：加密数据+摘要）
+		msg := append([]byte(encReq.EncryptedData), sum...)
+
+		// 使用请求中的公钥验证签名
+		isValid := pub.Verify(msg, encReq.Signature)
+
+		if !isValid {
+			log.Printf("SM2签名验证失败")
+			sendUDPErrorResponse(s.udpConn, addr, "SM2签名验证失败")
+			return
+		}
+
+		log.Printf("SM2签名验证成功")
+	}
 
 	// 解密请求
 	req, err := DecryptSPARequest(encReq.EncryptedData)
@@ -398,7 +457,7 @@ func (s *SpaServer) AllocatePort(req KnockRequest) (KnockResponse, error) {
 func (s *SpaServer) ValidatePortAllocation(port int, clientKey string) (bool, error) {
 	allocation, exists := s.allocations.Load(port)
 	if !exists {
-		return false, errors.New("未分配的端口")
+		return false, errors.New("端口无效")
 	}
 
 	portAlloc := allocation.(PortAllocation)
@@ -426,7 +485,7 @@ func (s *SpaServer) ExtendPortAllocation(port int) bool {
 
 	portAlloc := allocation.(PortAllocation)
 	portAlloc.ExpiresAt = time.Now().Add(s.config.PortValidity)
-	s.allocations.Store(port, portAlloc)
+	s.allocations.Store(portAlloc.Port, portAlloc)
 
 	return true
 }
@@ -473,7 +532,7 @@ func GenerateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	result := make([]byte, length)
 	for i := range result {
-		result[i] = charset[rand.Intn(len(charset))]
+		result[i] = charset[mrand.Intn(len(charset))]
 	}
 	return string(result)
 }
@@ -507,4 +566,56 @@ func (s *SpaServer) GetActiveConnections() []PortAllocation {
 	})
 
 	return connections
+}
+
+// loadPublicKeys 从公钥目录加载SM2公钥
+func (s *SpaServer) loadPublicKeys() {
+	if s.config.PublicKeysDir == "" {
+		log.Println("未配置公钥目录，跳过公钥加载")
+		return
+	}
+
+	log.Printf("从目录加载SM2公钥: %s", s.config.PublicKeysDir)
+
+	// 读取目录中的所有文件
+	files, err := os.ReadDir(s.config.PublicKeysDir)
+	if err != nil {
+		log.Printf("读取公钥目录失败: %v", err)
+		return
+	}
+
+	// 遍历目录中的所有文件
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		// 只处理PEM文件
+		if !strings.HasSuffix(file.Name(), ".pem") {
+			continue
+		}
+
+		// 从文件名中提取客户端ID（去除.pem扩展名）
+		clientID := strings.TrimSuffix(file.Name(), ".pem")
+
+		// 加载公钥文件
+		pubKeyPath := filepath.Join(s.config.PublicKeysDir, file.Name())
+		pubKey, err := sm2.LoadPublicKeyFromPEM(pubKeyPath)
+		if err != nil {
+			log.Printf("加载SM2公钥文件失败 %s: %v", pubKeyPath, err)
+			continue
+		}
+
+		// 将公钥存储到内存映射中
+		s.clientPublicKeys.Store(clientID, pubKey)
+		log.Printf("成功加载客户端 %s 的SM2公钥", clientID)
+	}
+
+	// 打印加载的公钥数量
+	count := 0
+	s.clientPublicKeys.Range(func(_, _ interface{}) bool {
+		count++
+		return true
+	})
+	log.Printf("共加载了 %d 个SM2公钥", count)
 }

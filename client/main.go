@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"golang-spa-auth/client/spa"
 
@@ -133,8 +134,16 @@ func handleKnock(c *gin.Context) {
 		clientKey = req.ClientKey
 	}
 
+	// 获取私钥的文件路径
+	privateKeyPath := filepath.Join("keys", "sm2private.pem")
+	if _, err := os.Stat(privateKeyPath); os.IsNotExist(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("私钥文件不存在: %s", privateKeyPath),
+		})
+		return
+	}
 	// 发送真实UDP敲门请求
-	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey)
+	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey, privateKeyPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("敲门失败: %v", err),
@@ -227,9 +236,18 @@ func handleDirectKnock(c *gin.Context) {
 		clientKey = req.ClientKey
 	}
 
+	// 获取私钥的文件路径
+	privateKeyPath := filepath.Join("keys", "sm2private.pem")
+	if _, err := os.Stat(privateKeyPath); os.IsNotExist(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("私钥文件不存在: %s", privateKeyPath),
+		})
+		return
+	}
+
 	// 使用SPA客户端直接发送UDP敲门请求
 	logger.Info("发起直接UDP敲门请求到 %s:%d", serverIP, udpPort)
-	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey)
+	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey, privateKeyPath)
 	if err != nil {
 		logger.Error("UDP敲门失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{

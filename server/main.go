@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"path/filepath"
 	"time"
 
 	"golang-spa-auth/server/database"
@@ -11,6 +12,10 @@ import (
 )
 
 func main() {
+	// 设置SM2公钥目录
+	publicKeysDir := filepath.Join(".", "server", "keys")
+	log.Printf("配置SM2公钥目录: %s", publicKeysDir)
+
 	// 初始化SPA服务器实例
 	spaConfig := security.SpaConfig{
 		Secret:            "server_secret_key", // 用于验证敲门包的密钥
@@ -19,6 +24,7 @@ func main() {
 		TCPPortRangeEnd:   10100,
 		AllowedClients:    []string{"client_secret_key"},
 		PortValidity:      30 * time.Second, // 过期时间
+		PublicKeysDir:     publicKeysDir,    // SM2公钥目录
 	}
 	// 初始化数据库连接
 	database.InitDB()

@@ -112,10 +112,12 @@ func DecryptSPAResponse(encryptedBase64 string) (*KnockResponse, error) {
 	return &resp, nil
 }
 
-// EncryptedSPARequest 表示加密后的敲门请求
-type EncryptedSPARequest struct {
-	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
-}
+// // EncryptedSPARequest 表示加密后的敲门请求
+// type EncryptedSPARequest struct {
+// 	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
+// 	pub          sm2.PublicKey // 公钥
+// 	Signature    []byte         // 签名
+// }
 
 // EncryptedSPAResponse 表示加密后的敲门响应
 type EncryptedSPAResponse struct {

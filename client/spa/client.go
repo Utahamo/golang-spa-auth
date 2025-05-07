@@ -2,18 +2,24 @@ package spa
 
 import (
 	"bytes"
-
+	"crypto/rand"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
+	"math/big"
+	mrand "math/rand"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"golang-spa-auth/server/gmsm/sm2"
+	"golang-spa-auth/server/gmsm/sm3"
 	"golang-spa-auth/server/gmsm/sm4" // 使用服务端的SM4实现
 )
 
@@ -23,7 +29,6 @@ type KnockRequest struct {
 	ClientKey string `json:"client_key"` // 客户端密钥
 	ClientIP  string `json:"client_ip"`  // 客户端IP
 	Timestamp int64  `json:"timestamp"`  // 请求时间戳
-	Signature string `json:"signature"`  // 请求签名
 }
 
 // KnockResponse 表示敲门响应
@@ -57,6 +62,8 @@ func init() {
 // EncryptedSPARequest 表示加密后的敲门请求
 type EncryptedSPARequest struct {
 	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
+	PublicKeyPEM  string `json:"public_key_pem"` // PEM格式的SM2公钥
+	Signature     []byte `json:"signature"`      // SM2签名
 }
 
 // EncryptedSPAResponse 表示加密后的敲门响应
@@ -70,15 +77,16 @@ func generateRandomString(length int) string {
 	result := make([]byte, length)
 	for i := range result {
 		// 这里使用时间作为随机源，在生产环境中应该使用更安全的随机源
-		source := rand.NewSource(time.Now().UnixNano() + int64(i))
-		r := rand.New(source)
+		source := mrand.NewSource(time.Now().UnixNano() + int64(i))
+		r := mrand.New(source)
 		result[i] = charset[r.Intn(len(charset))]
 	}
 	return string(result)
 }
 
 // 更新SendKnockRequest函数，实现真正的UDP敲门并使用SM4加密
-func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockResponse, error) {
+// 添加从文件加载SM2私钥进行签名的功能
+func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKeyPath string) (*KnockResponse, error) {
 	// 创建UDP连接
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", serverIP, udpPort))
 	if err != nil {
@@ -106,8 +114,6 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 		ClientKey: clientKey,
 		ClientIP:  clientIP,
 		Timestamp: timestamp,
-		// 先不生成签名，让服务端验证非签名模式
-		// Signature: signature,
 	}
 
 	// 使用SM4加密请求数据
@@ -116,9 +122,55 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 		return nil, fmt.Errorf("加密请求失败: %v", err)
 	}
 
+	// 使用SM3进行摘要计算
+	h := sm3.New()
+	h.Write([]byte(encryptedData))
+	sum := h.Sum(nil)
+	fmt.Printf("SM3摘要: %x\n", sum)
+
+	// 根据是否提供私钥文件路径决定使用方式
+	var priv *sm2.PrivateKey
+	var pub *sm2.PublicKey
+
+	if privateKeyPath == "" {
+		// 如果未提供私钥文件，则生成临时密钥对
+		fmt.Println("未提供私钥文件，使用临时生成的SM2密钥对...")
+		priv, err = sm2.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("生成SM2密钥对失败: %v", err)
+		}
+		pub = &priv.PublicKey
+	} else {
+		// 从文件加载私钥
+		fmt.Printf("正在从文件加载SM2私钥: %s\n", privateKeyPath)
+		priv, err = LoadPrivateKeyFromPEM(privateKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("加载SM2私钥失败: %v", err)
+		}
+		pub = &priv.PublicKey
+	}
+
+	// 将消息和摘要组合起来
+	msg := append([]byte(encryptedData), sum...)
+
+	// 使用私钥签名
+	signature, err := priv.Sign(rand.Reader, msg, nil)
+	if err != nil {
+		return nil, fmt.Errorf("SM2签名失败: %v", err)
+	}
+	fmt.Printf("SM2签名完成，长度: %d 字节\n", len(signature))
+
+	// 将公钥转换为PEM格式
+	pubKeyPEM, err := PublicKeyToPEM(pub)
+	if err != nil {
+		return nil, fmt.Errorf("转换公钥为PEM格式失败: %v", err)
+	}
+
 	// 构建加密请求对象
 	encReq := EncryptedSPARequest{
 		EncryptedData: encryptedData,
+		PublicKeyPEM:  pubKeyPEM,
+		Signature:     signature,
 	}
 
 	// 序列化加密请求
@@ -128,7 +180,7 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 	}
 
 	fmt.Printf("发送加密UDP敲门数据包，长度: %d 字节\n", len(reqData))
-	
+
 	// 发送UDP数据包
 	_, err = conn.Write(reqData)
 	if err != nil {
@@ -147,7 +199,7 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 
 	// 解析响应
 	responseData := buffer[:n]
-	
+
 	// 检查是否为错误响应
 	var errorResp map[string]interface{}
 	if err := json.Unmarshal(responseData, &errorResp); err == nil {
@@ -166,7 +218,7 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string) (*KnockRes
 		}
 		return &response, nil
 	}
-	
+
 	// 解密响应
 	resp, err := decryptSPAResponse(encResp.EncryptedData)
 	if err != nil {
@@ -301,4 +353,114 @@ func decryptSPAResponse(encryptedBase64 string) (*KnockResponse, error) {
 	}
 
 	return &resp, nil
+}
+
+// LoadPrivateKeyFromPEM 从PEM文件加载SM2私钥
+func LoadPrivateKeyFromPEM(filePath string) (*sm2.PrivateKey, error) {
+	// 读取文件
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("读取私钥文件失败: %v", err)
+	}
+
+	// 解析PEM块
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "SM2 PRIVATE KEY" {
+		return nil, fmt.Errorf("无效的SM2私钥PEM文件")
+	}
+
+	// 解析私钥
+	return ParseSM2PrivateKey(block.Bytes)
+}
+
+// PublicKeyToPEM 将SM2公钥转换为PEM格式字符串
+func PublicKeyToPEM(pub *sm2.PublicKey) (string, error) {
+	// 将公钥序列化
+	pubKeyBytes, err := MarshalSM2PublicKey(pub)
+	if err != nil {
+		return "", fmt.Errorf("序列化公钥失败: %v", err)
+	}
+
+	// 创建PEM块
+	block := &pem.Block{
+		Type:  "SM2 PUBLIC KEY",
+		Bytes: pubKeyBytes,
+	}
+
+	// 编码为PEM格式
+	var buf bytes.Buffer
+	err = pem.Encode(&buf, block)
+	if err != nil {
+		return "", fmt.Errorf("PEM编码失败: %v", err)
+	}
+
+	return buf.String(), nil
+}
+
+// MarshalSM2PublicKey 将SM2公钥序列化为ASN.1 DER编码
+func MarshalSM2PublicKey(key *sm2.PublicKey) ([]byte, error) {
+	type sm2PublicKey struct {
+		X, Y *big.Int
+	}
+
+	pubKey := sm2PublicKey{
+		X: key.X,
+		Y: key.Y,
+	}
+
+	return asn1.Marshal(pubKey)
+}
+
+// ParseSM2PrivateKey 从ASN.1 DER编码解析SM2私钥
+func ParseSM2PrivateKey(derBytes []byte) (*sm2.PrivateKey, error) {
+	type sm2PrivateKey struct {
+		Version       int
+		PrivateKey    []byte
+		NamedCurveOID asn1.ObjectIdentifier
+		PublicKey     asn1.BitString
+	}
+
+	var privKey sm2PrivateKey
+	_, err := asn1.Unmarshal(derBytes, &privKey)
+	if err != nil {
+		return nil, fmt.Errorf("ASN.1解析失败: %v", err)
+	}
+
+	// 创建SM2私钥
+	curve := sm2.P256Sm2()
+	priv := new(sm2.PrivateKey)
+	priv.PublicKey.Curve = curve
+	priv.D = new(big.Int).SetBytes(privKey.PrivateKey)
+
+	// 从存储的公钥解析X和Y坐标
+	pub, err := ParseSM2PublicKey(privKey.PublicKey.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("解析公钥失败: %v", err)
+	}
+	priv.PublicKey.X = pub.X
+	priv.PublicKey.Y = pub.Y
+
+	return priv, nil
+}
+
+// ParseSM2PublicKey 从ASN.1 DER编码解析SM2公钥
+func ParseSM2PublicKey(derBytes []byte) (*sm2.PublicKey, error) {
+	type sm2PublicKey struct {
+		X, Y *big.Int
+	}
+
+	var pubKey sm2PublicKey
+	_, err := asn1.Unmarshal(derBytes, &pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("ASN.1解析失败: %v", err)
+	}
+
+	// 创建SM2公钥
+	curve := sm2.P256Sm2()
+	pub := new(sm2.PublicKey)
+	pub.Curve = curve
+	pub.X = pubKey.X
+	pub.Y = pubKey.Y
+
+	return pub, nil
 }
