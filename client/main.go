@@ -19,11 +19,15 @@ import (
 // 全局配置
 var (
 	config struct {
-		ServerIP     string `json:"server_ip"`
-		UDPPort      int    `json:"udp_port"`
-		ClientKey    string `json:"client_key"`
-		ServerSecret string `json:"server_secret"`
-		HTTPPort     int    `json:"http_port"`
+		ServerIP       string `json:"server_ip"`
+		UDPPort        int    `json:"udp_port"`
+		ClientKey      string `json:"client_key"`
+		ServerSecret   string `json:"server_secret"`
+		HTTPPort       int    `json:"http_port"`
+		PrivateKeyPath string `json:"private_key_path"`
+		SPAVersion     string `json:"spa_version"`
+		Username       string `json:"username"`
+		TargetPort     int    `json:"target_port"`
 	}
 )
 
@@ -34,6 +38,10 @@ func init() {
 	config.ClientKey = "client_secret_key"
 	config.ServerSecret = "server_secret_key"
 	config.HTTPPort = 3000
+	config.PrivateKeyPath = "keys/sm2private.pem"
+	config.SPAVersion = "0.1"
+	config.Username = "client_pc"
+	config.TargetPort = 22
 
 	// 尝试加载配置文件
 	loadConfig()
@@ -107,9 +115,12 @@ func main() {
 // SPA敲门请求处理
 func handleKnock(c *gin.Context) {
 	var req struct {
-		ServerIP  string `json:"server_ip"`
-		UDPPort   int    `json:"udp_port"`
-		ClientKey string `json:"client_key"`
+		ServerIP   string `json:"server_ip"`
+		UDPPort    int    `json:"udp_port"`
+		ClientKey  string `json:"client_key"`
+		SPAVersion string `json:"spa_version"`
+		Username   string `json:"username"`
+		TargetPort int    `json:"target_port"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -121,36 +132,57 @@ func handleKnock(c *gin.Context) {
 	serverIP := config.ServerIP
 	udpPort := config.UDPPort
 	clientKey := config.ClientKey
+	spaVersion := config.SPAVersion
+	username := config.Username
+	targetPort := config.TargetPort
 
 	if req.ServerIP != "" {
 		serverIP = req.ServerIP
 	}
-
 	if req.UDPPort != 0 {
 		udpPort = req.UDPPort
 	}
-
 	if req.ClientKey != "" {
 		clientKey = req.ClientKey
 	}
+	if req.SPAVersion != "" {
+		spaVersion = req.SPAVersion
+	}
+	if req.Username != "" {
+		username = req.Username
+	}
+	if req.TargetPort != 0 {
+		targetPort = req.TargetPort
+	}
 
-	// 获取私钥的文件路径
-	privateKeyPath := filepath.Join("keys", "sm2private.pem")
+	// 获取私钥文件路径
+	privateKeyPath := config.PrivateKeyPath
+	if privateKeyPath == "" {
+		privateKeyPath = filepath.Join("keys", "sm2private.pem")
+	}
+
 	if _, err := os.Stat(privateKeyPath); os.IsNotExist(err) {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("私钥文件不存在: %s", privateKeyPath),
 		})
 		return
 	}
+
 	// 发送真实UDP敲门请求
-	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey, privateKeyPath)
+	logger.Info("发起UDP敲门请求: 服务器=%s, 端口=%d, 版本=%s, 用户名=%s, 目标端口=%d",
+		serverIP, udpPort, spaVersion, username, targetPort)
+
+	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey, privateKeyPath,
+		spaVersion, username, targetPort)
 	if err != nil {
+		logger.Error("敲门失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("敲门失败: %v", err),
 		})
 		return
 	}
 
+	logger.Info("敲门成功，分配端口: %d", response.Port)
 	c.JSON(http.StatusOK, response)
 }
 
@@ -208,9 +240,12 @@ func handleConnect(c *gin.Context) {
 // 主文件添加直接UDP敲门处理函数
 func handleDirectKnock(c *gin.Context) {
 	var req struct {
-		ServerIP  string `json:"server_ip"`
-		UDPPort   int    `json:"udp_port"`
-		ClientKey string `json:"client_key"`
+		ServerIP   string `json:"server_ip"`
+		UDPPort    int    `json:"udp_port"`
+		ClientKey  string `json:"client_key"`
+		SPAVersion string `json:"spa_version"`
+		Username   string `json:"username"`
+		TargetPort int    `json:"target_port"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -223,21 +258,35 @@ func handleDirectKnock(c *gin.Context) {
 	serverIP := config.ServerIP
 	udpPort := config.UDPPort
 	clientKey := config.ClientKey
+	spaVersion := config.SPAVersion
+	username := config.Username
+	targetPort := config.TargetPort
 
 	if req.ServerIP != "" {
 		serverIP = req.ServerIP
 	}
-
 	if req.UDPPort != 0 {
 		udpPort = req.UDPPort
 	}
-
 	if req.ClientKey != "" {
 		clientKey = req.ClientKey
 	}
+	if req.SPAVersion != "" {
+		spaVersion = req.SPAVersion
+	}
+	if req.Username != "" {
+		username = req.Username
+	}
+	if req.TargetPort != 0 {
+		targetPort = req.TargetPort
+	}
 
-	// 获取私钥的文件路径
-	privateKeyPath := filepath.Join("keys", "sm2private.pem")
+	// 获取私钥文件路径
+	privateKeyPath := config.PrivateKeyPath
+	if privateKeyPath == "" {
+		privateKeyPath = filepath.Join("keys", "sm2private.pem")
+	}
+
 	if _, err := os.Stat(privateKeyPath); os.IsNotExist(err) {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("私钥文件不存在: %s", privateKeyPath),
@@ -246,8 +295,11 @@ func handleDirectKnock(c *gin.Context) {
 	}
 
 	// 使用SPA客户端直接发送UDP敲门请求
-	logger.Info("发起直接UDP敲门请求到 %s:%d", serverIP, udpPort)
-	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey, privateKeyPath)
+	logger.Info("发起直接UDP敲门请求: 服务器=%s, 端口=%d, 版本=%s, 用户名=%s, 目标端口=%d",
+		serverIP, udpPort, spaVersion, username, targetPort)
+
+	response, err := spa.SendKnockRequest(serverIP, udpPort, clientKey, privateKeyPath,
+		spaVersion, username, targetPort)
 	if err != nil {
 		logger.Error("UDP敲门失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{

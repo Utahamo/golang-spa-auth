@@ -12,8 +12,14 @@ import (
 )
 
 func main() {
-	// 设置SM2公钥目录
-	publicKeysDir := filepath.Join(".", "server", "keys")
+	// 获取当前目录的绝对路径
+	execDir, err := filepath.Abs(".")
+	if err != nil {
+		log.Fatalf("获取当前目录绝对路径失败: %v", err)
+	}
+
+	// 设置SM2公钥目录为绝对路径
+	publicKeysDir := filepath.Join(execDir, "server", "keys")
 	log.Printf("配置SM2公钥目录: %s", publicKeysDir)
 
 	// 初始化SPA服务器实例

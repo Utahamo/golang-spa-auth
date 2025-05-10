@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/asn1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +32,12 @@ type KnockRequest struct {
 	ClientKey string `json:"client_key"` // 客户端密钥
 	ClientIP  string `json:"client_ip"`  // 客户端IP
 	Timestamp int64  `json:"timestamp"`  // 请求时间戳
+
+	// 新增字段
+	SPAVersion        string `json:"spa_version"`        // SPA版本号
+	Username          string `json:"username"`           // 用户名
+	DeviceFingerprint string `json:"device_fingerprint"` // 设备指纹
+	TargetPort        int    `json:"target_port"`        // 目的端口号
 }
 
 // KnockResponse 表示敲门响应
@@ -62,7 +71,7 @@ func init() {
 // EncryptedSPARequest 表示加密后的敲门请求
 type EncryptedSPARequest struct {
 	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
-	PublicKeyPEM  string `json:"public_key_pem"` // PEM格式的SM2公钥
+	KeyID         string `json:"key_id"`         // 用于在服务端查找公钥的标识符（通常为客户端ID或密钥）
 	Signature     []byte `json:"signature"`      // SM2签名
 }
 
@@ -86,7 +95,8 @@ func generateRandomString(length int) string {
 
 // 更新SendKnockRequest函数，实现真正的UDP敲门并使用SM4加密
 // 添加从文件加载SM2私钥进行签名的功能
-func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKeyPath string) (*KnockResponse, error) {
+// 添加新的参数：spaVersion, username, targetPort，设备指纹会自动计算
+func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKeyPath string, spaVersion string, username string, targetPort int) (*KnockResponse, error) {
 	// 创建UDP连接
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", serverIP, udpPort))
 	if err != nil {
@@ -108,12 +118,28 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKey
 	// 生成随机Nonce（防重放攻击）
 	nonce := generateRandomString(16)
 
+	// 生成设备指纹
+	deviceFingerprint, err := GenerateDeviceFingerprint()
+	if err != nil {
+		// 如果生成失败，使用一个随机字符串作为备用
+		deviceFingerprint = generateRandomString(32)
+		fmt.Printf("生成设备指纹失败，使用随机字符串: %s\n", deviceFingerprint)
+	} else {
+		fmt.Printf("成功生成设备指纹: %s\n", deviceFingerprint)
+	}
+
 	// 构建敲门请求
 	req := KnockRequest{
 		Nonce:     nonce,
 		ClientKey: clientKey,
 		ClientIP:  clientIP,
 		Timestamp: timestamp,
+
+		// 添加新字段
+		SPAVersion:        spaVersion,
+		Username:          username,
+		DeviceFingerprint: deviceFingerprint,
+		TargetPort:        targetPort,
 	}
 
 	// 使用SM4加密请求数据
@@ -130,7 +156,7 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKey
 
 	// 根据是否提供私钥文件路径决定使用方式
 	var priv *sm2.PrivateKey
-	var pub *sm2.PublicKey
+	// var pub *sm2.PublicKey
 
 	if privateKeyPath == "" {
 		// 如果未提供私钥文件，则生成临时密钥对
@@ -139,7 +165,7 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKey
 		if err != nil {
 			return nil, fmt.Errorf("生成SM2密钥对失败: %v", err)
 		}
-		pub = &priv.PublicKey
+		// pub = &priv.PublicKey
 	} else {
 		// 从文件加载私钥
 		fmt.Printf("正在从文件加载SM2私钥: %s\n", privateKeyPath)
@@ -147,7 +173,7 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKey
 		if err != nil {
 			return nil, fmt.Errorf("加载SM2私钥失败: %v", err)
 		}
-		pub = &priv.PublicKey
+		// pub = &priv.PublicKey
 	}
 
 	// 将消息和摘要组合起来
@@ -160,16 +186,10 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKey
 	}
 	fmt.Printf("SM2签名完成，长度: %d 字节\n", len(signature))
 
-	// 将公钥转换为PEM格式
-	pubKeyPEM, err := PublicKeyToPEM(pub)
-	if err != nil {
-		return nil, fmt.Errorf("转换公钥为PEM格式失败: %v", err)
-	}
-
-	// 构建加密请求对象
+	// 构建加密请求对象 - 使用clientKey作为KeyID
 	encReq := EncryptedSPARequest{
 		EncryptedData: encryptedData,
-		PublicKeyPEM:  pubKeyPEM,
+		KeyID:         clientKey, // 使用clientKey作为密钥标识符
 		Signature:     signature,
 	}
 
@@ -180,6 +200,8 @@ func SendKnockRequest(serverIP string, udpPort int, clientKey string, privateKey
 	}
 
 	fmt.Printf("发送加密UDP敲门数据包，长度: %d 字节\n", len(reqData))
+	fmt.Printf("SPA包信息: 版本=%s, 用户名=%s, 设备指纹=%s, 目标端口=%d\n",
+		req.SPAVersion, req.Username, req.DeviceFingerprint, req.TargetPort)
 
 	// 发送UDP数据包
 	_, err = conn.Write(reqData)
@@ -463,4 +485,55 @@ func ParseSM2PublicKey(derBytes []byte) (*sm2.PublicKey, error) {
 	pub.Y = pubKey.Y
 
 	return pub, nil
+}
+
+// GenerateDeviceFingerprint 生成设备指纹
+// 基于设备的唯一特性，如主机名、CPU信息、MAC地址等
+func GenerateDeviceFingerprint() (string, error) {
+	var fingerprintData []string
+
+	// 1. 获取主机名
+	hostname, err := os.Hostname()
+	if err == nil {
+		fingerprintData = append(fingerprintData, hostname)
+	}
+
+	// 2. 获取操作系统信息
+	fingerprintData = append(fingerprintData, runtime.GOOS, runtime.GOARCH)
+
+	// 3. 获取CPU核心数
+	fingerprintData = append(fingerprintData, strconv.Itoa(runtime.NumCPU()))
+
+	// 4. 获取MAC地址（通常MAC地址是一个较好的硬件标识符）
+	interfaces, err := net.Interfaces()
+	if err == nil {
+		for _, iface := range interfaces {
+			if iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0 {
+				// 过滤掉未启动和回环接口
+				fingerprintData = append(fingerprintData, iface.HardwareAddr.String())
+			}
+		}
+	}
+
+	// 5. 获取本地IP地址
+	addrs, err := net.InterfaceAddrs()
+	if err == nil {
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+				fingerprintData = append(fingerprintData, ipnet.IP.String())
+			}
+		}
+	}
+
+	// 使用SM3哈希算法计算设备指纹
+	// 将所有收集的数据连接起来
+	dataStr := strings.Join(fingerprintData, "|")
+
+	// 计算SM3哈希
+	h := sm3.New()
+	h.Write([]byte(dataStr))
+	hash := h.Sum(nil)
+
+	// 返回十六进制形式的哈希值
+	return hex.EncodeToString(hash), nil
 }

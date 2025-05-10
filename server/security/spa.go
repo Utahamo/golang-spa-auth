@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
@@ -55,17 +54,21 @@ type SpaConfig struct {
 // }
 
 type KnockRequest struct {
-	Nonce     string `json:"nonce"`      // 随机字符串
-	ClientKey string `json:"client_key"` // 客户端密钥
-	ClientIP  string `json:"client_ip"`  // 客户端IP
-	Timestamp int64  `json:"timestamp"`  // 请求时间戳
-	Signature string `json:"signature"`  // 请求签名（可选）
+	Nonce             string `json:"nonce"`              // 随机字符串
+	ClientKey         string `json:"client_key"`         // 客户端密钥
+	ClientIP          string `json:"client_ip"`          // 客户端IP
+	Timestamp         int64  `json:"timestamp"`          // 请求时间戳
+	Signature         string `json:"signature"`          // 请求签名（可选）
+	SPAVersion        string `json:"spa_version"`        // SPA版本号
+	Username          string `json:"username"`           // 用户名
+	DeviceFingerprint string `json:"device_fingerprint"` // 设备指纹
+	TargetPort        int    `json:"target_port"`        // 目的端口号
 }
 
 // EncryptedSPARequest 表示加密后的敲门请求
 type EncryptedSPARequest struct {
 	EncryptedData string `json:"encrypted_data"` // Base64编码的加密数据
-	PublicKeyPEM  string `json:"public_key_pem"` // PEM格式的SM2公钥
+	KeyID         string `json:"key_id"`         // 用于在服务端查找公钥的标识符（通常为客户端ID或密钥）
 	Signature     []byte `json:"signature"`      // SM2签名
 }
 
@@ -217,24 +220,18 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 	log.Printf("检测到加密请求, 加密数据: %s", encReq.EncryptedData)
 
 	// 验证SM2签名
-	if encReq.Signature != nil && len(encReq.PublicKeyPEM) > 0 {
+	if encReq.Signature != nil && len(encReq.KeyID) > 0 {
 		log.Println("检测到SM2签名，进行验证...")
 
-		// 从PEM格式字符串加载公钥
-		block, _ := pem.Decode([]byte(encReq.PublicKeyPEM))
-		if block == nil || block.Type != "SM2 PUBLIC KEY" {
-			log.Printf("无效的SM2公钥PEM格式")
-			sendUDPErrorResponse(s.udpConn, addr, "无效的SM2公钥PEM格式")
+		// 从内存映射中查找公钥
+		pubKey, exists := s.clientPublicKeys.Load(encReq.KeyID)
+		if !exists {
+			log.Printf("未找到对应的SM2公钥")
+			sendUDPErrorResponse(s.udpConn, addr, "未找到对应的SM2公钥")
 			return
 		}
 
-		// 解析公钥
-		pub, err := sm2.ParseSM2PublicKey(block.Bytes)
-		if err != nil {
-			log.Printf("解析SM2公钥失败: %v", err)
-			sendUDPErrorResponse(s.udpConn, addr, "解析SM2公钥失败: "+err.Error())
-			return
-		}
+		pub := pubKey.(*sm2.PublicKey)
 
 		// 使用SM3计算摘要
 		h := sm3.New()
@@ -264,7 +261,14 @@ func (s *SpaServer) handleKnockRequest(data []byte, addr *net.UDPAddr) {
 		return
 	}
 
-	log.Printf("成功解密请求: %+v", *req) // 打印解密后的请求内容
+	// 打印详细的请求信息，特别是新增字段
+	log.Printf("成功解密SPA请求:")
+	log.Printf("  基本信息: Nonce=%s, ClientKey=%s, Timestamp=%d",
+		req.Nonce, req.ClientKey, req.Timestamp)
+	log.Printf("  来源信息: ClientIP=%s", req.ClientIP)
+	log.Printf("  新增信息: SPA版本=%s, 用户名=%s, 目标端口=%d",
+		req.SPAVersion, req.Username, req.TargetPort)
+	log.Printf("  设备指纹: %s", req.DeviceFingerprint)
 
 	// 设置客户端IP (使用实际UDP请求的源IP地址)
 	req.ClientIP = addr.IP.String()
@@ -576,6 +580,18 @@ func (s *SpaServer) loadPublicKeys() {
 	}
 
 	log.Printf("从目录加载SM2公钥: %s", s.config.PublicKeysDir)
+	absPath, err := filepath.Abs(s.config.PublicKeysDir)
+	if err != nil {
+		log.Printf("获取公钥目录绝对路径失败: %v", err)
+	} else {
+		log.Printf("公钥目录绝对路径: %s", absPath)
+	}
+
+	// 检查目录是否存在
+	if _, err := os.Stat(s.config.PublicKeysDir); os.IsNotExist(err) {
+		log.Printf("公钥目录不存在: %s", s.config.PublicKeysDir)
+		return
+	}
 
 	// 读取目录中的所有文件
 	files, err := os.ReadDir(s.config.PublicKeysDir)
@@ -584,19 +600,24 @@ func (s *SpaServer) loadPublicKeys() {
 		return
 	}
 
+	log.Printf("公钥目录中共有 %d 个文件/目录", len(files))
+
 	// 遍历目录中的所有文件
 	for _, file := range files {
 		if file.IsDir() {
+			log.Printf("跳过子目录: %s", file.Name())
 			continue
 		}
 
 		// 只处理PEM文件
 		if !strings.HasSuffix(file.Name(), ".pem") {
+			log.Printf("跳过非PEM文件: %s", file.Name())
 			continue
 		}
 
 		// 从文件名中提取客户端ID（去除.pem扩展名）
 		clientID := strings.TrimSuffix(file.Name(), ".pem")
+		log.Printf("处理公钥文件: %s, 客户端ID: %s", file.Name(), clientID)
 
 		// 加载公钥文件
 		pubKeyPath := filepath.Join(s.config.PublicKeysDir, file.Name())
@@ -611,11 +632,13 @@ func (s *SpaServer) loadPublicKeys() {
 		log.Printf("成功加载客户端 %s 的SM2公钥", clientID)
 	}
 
-	// 打印加载的公钥数量
+	// 打印加载的公钥数量和所有加载的客户端ID
 	count := 0
-	s.clientPublicKeys.Range(func(_, _ interface{}) bool {
+	var clientIDs []string
+	s.clientPublicKeys.Range(func(key, _ interface{}) bool {
 		count++
+		clientIDs = append(clientIDs, key.(string))
 		return true
 	})
-	log.Printf("共加载了 %d 个SM2公钥", count)
+	log.Printf("共加载了 %d 个SM2公钥, 客户端ID列表: %v", count, clientIDs)
 }
